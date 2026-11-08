@@ -118,7 +118,8 @@ class XPublisher(BasePublisher):
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
 
-        temp_img = self._prepare_x_image(deal.image_url)
+        # 画像は添付せず、URLのOGPカード(summary_large_image)で表示する → 画像タップでサイトへ遷移できる
+        temp_img = self._prepare_x_image(deal.image_url) if config.x_attach_image else None
         share_url = deal.get_share_url(config.site_base_url)
         text = deal.format_x_post_text(share_url=share_url)
         driver = None
@@ -194,6 +195,16 @@ class XPublisher(BasePublisher):
                     time.sleep(2.5)
                 except Exception as img_err:
                     logger.warning(f"[X-Selenium] 画像添付をスキップしました: {img_err}")
+
+            # リンクカード(画像プレビュー)が生成されるのを待つ (最大12秒)
+            if not (temp_img and temp_img.exists()):
+                try:
+                    WebDriverWait(driver, 12).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="card.wrapper"]'))
+                    )
+                    logger.info("[X-Selenium] リンクカードの生成を確認しました")
+                except Exception:
+                    logger.warning("[X-Selenium] リンクカードを確認できませんでした(リンクのみで投稿します)")
 
             # ポスト送信ボタンを押下 (Ctrl+Enter または ボタンクリック)
             time.sleep(1.5)

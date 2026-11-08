@@ -24,6 +24,7 @@ class Config:
     x_use_selenium: bool = os.getenv("X_USE_SELENIUM", "true").lower() in ("true", "1", "yes")
     x_headless: bool = os.getenv("X_HEADLESS", "false").lower() in ("true", "1", "yes")
     x_chrome_profile_dir: str = os.getenv("X_CHROME_PROFILE_DIR", "chrome_profile_x")
+    x_attach_image: bool = os.getenv("X_ATTACH_IMAGE", "false").lower() in ("true", "1", "yes")
     x_api_key: str = os.getenv("X_API_KEY", "")
     x_api_secret: str = os.getenv("X_API_SECRET", "")
     x_access_token: str = os.getenv("X_ACCESS_TOKEN", "")
