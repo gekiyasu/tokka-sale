@@ -1,0 +1,11 @@
+# 環境変数・認証情報（絶対に公開しない）
+.env
+chrome_profile_x/
+
+# 一時ファイル・キャッシュ
+__pycache__/
+*.py[cod]
+temp_x_post.jpg
+
+# ローカルDB
+deals_history.db
