@@ -136,6 +136,19 @@ class XPublisher(BasePublisher):
                 )
                 return False
 
+            # アカウントのロック・本人確認要求・凍結を検知したら、自動投稿を長時間停止する
+            try:
+                page_text = driver.page_source
+            except Exception:
+                page_text = ""
+            if "account/access" in current_url or any(
+                kw in page_text for kw in ["アカウントはロックされています", "アカウントが凍結", "Your account is suspended", "Your account has been locked"]
+            ):
+                from x_guard import XGuard, LOCK_PAUSE_HOURS
+                XGuard().pause(LOCK_PAUSE_HOURS, "Xがロック/凍結/本人確認を要求 (ブラウザで状況を確認してください)")
+                self._guard_handled = True
+                return False
+
             wait = WebDriverWait(driver, 20)
             textarea = wait.until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
@@ -218,18 +231,35 @@ class XPublisher(BasePublisher):
     def publish(self, deal: ProductDeal) -> bool:
         if not self.enabled:
             return False
+
+        # 凍結・制限対策: 投稿時間帯 / 1日の上限 / 投稿間隔 / 自動停止の判定
+        from x_guard import XGuard
+        guard = XGuard()
+        allowed, reason = guard.check()
+        if not allowed:
+            logger.info(f"[X] 今回はX投稿を見送ります: {reason}")
+            return False
+
         if self.use_selenium:
-            return self._publish_via_selenium(deal)
-        if not self.client:
-            return False
-        try:
-            text = deal.format_x_post_text()
-            response = self.client.create_tweet(text=text)
-            logger.info(f"[X-API] ツイート成功 (ID: {response.data['id']})")
-            return True
-        except Exception as e:
-            logger.error(f"[X-API] 投稿エラー: {e}")
-            return False
+            ok = self._publish_via_selenium(deal)
+        elif not self.client:
+            ok = False
+        else:
+            try:
+                text = deal.format_x_post_text()
+                response = self.client.create_tweet(text=text)
+                logger.info(f"[X-API] ツイート成功 (ID: {response.data['id']})")
+                ok = True
+            except Exception as e:
+                logger.error(f"[X-API] 投稿エラー: {e}")
+                ok = False
+
+        if ok:
+            guard.record_success()
+        elif not getattr(self, "_guard_handled", False):
+            guard.record_failure()
+        self._guard_handled = False
+        return ok
 
 class DiscordPublisher(BasePublisher):
     """Discord Webhook 投稿ドライバー (リッチなEmbed付き)"""
@@ -519,6 +549,15 @@ class MultiPublisher:
         if not DealsTracker().sync_live_amazon_data(deal):
             return 0
 
+        # 大特価まとめサイト (docs/index.html & docs/deals/<ASIN>.html) を自動更新
+        # SNS投稿の成否に関わらず、スキャンで確認できた商品は必ずサイトへ反映する
+        if config.enable_site_generation:
+            try:
+                from site_generator import SiteGenerator
+                SiteGenerator().build_site(latest_deal=deal)
+            except Exception as e:
+                logger.warning(f"まとめサイト生成中にエラーが発生しました: {e}")
+
         success_count = 0
         any_enabled = False
         for pub in self.publishers:
@@ -526,15 +565,6 @@ class MultiPublisher:
                 any_enabled = True
                 if pub.publish(deal):
                     success_count += 1
-
-        # 大特価まとめサイト (docs/index.html & docs/deals/<ASIN>.html) を自動更新
-        # SNS投稿が1つ以上成功した場合(または全SNS無効のデモ時)のみ、新商品をサイトへ反映して公開する
-        if config.enable_site_generation and (success_count > 0 or not any_enabled):
-            try:
-                from site_generator import SiteGenerator
-                SiteGenerator().build_site(latest_deal=deal)
-            except Exception as e:
-                logger.warning(f"まとめサイト生成中にエラーが発生しました: {e}")
         
         if not any_enabled:
             # どのSNSも有効化されていない場合はコンソールにシミュレーション出力

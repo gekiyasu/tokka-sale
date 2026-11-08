@@ -39,7 +39,10 @@ def run_job(tracker: DealsTracker, db: Database, publisher: MultiPublisher, forc
         logger.info(f"🚀 新規セール検知: [{deal.discount_percent}% OFF] {deal.title[:30]}...")
         success_count = publisher.broadcast(deal)
         any_enabled = any(getattr(pub, 'enabled', False) for pub in publisher.publishers)
-        if any_enabled and success_count == 0:
+        # Amazonページで実在・割引を確認できた商品は、SNS側の投稿制限(X安全装置など)で見送られても
+        # まとめサイトには掲載する (サイトは自動で拡充される)
+        live_verified = bool(getattr(deal, "_live_synced", False))
+        if any_enabled and success_count == 0 and not live_verified:
             logger.warning(f"⚠️ ASIN: {deal.asin} の配信がスキップされました（次の商品を試行します）。")
             continue
 
