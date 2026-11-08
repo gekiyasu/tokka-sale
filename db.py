@@ -97,12 +97,19 @@ class Database:
             ))
             conn.commit()
 
-    def get_recent_deals(self, limit: int = 60) -> List[dict]:
-        """まとめサイト掲載用に直近のセール商品を新しい順（ASIN重複排除）で取得"""
+    def get_recent_deals(self, limit: int = 200, max_age_days: Optional[int] = None) -> List[dict]:
+        """まとめサイト掲載用に直近のセール商品を新しい順（ASIN重複排除）で取得。
+        max_age_days を指定すると、掲載(取得)から指定日数を超えた古い商品は除外する（価格の古さ対策）。"""
+        age_clause = ""
+        params: list = []
+        if max_age_days:
+            age_clause = "AND posted_at >= datetime('now', ?)"
+            params.append(f"-{int(max_age_days)} days")
+        params.append(limit)
         with self._get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT
                     asin,
                     price,
@@ -119,9 +126,10 @@ class Database:
                 WHERE id IN (
                     SELECT MAX(id) FROM posted_deals GROUP BY asin
                 )
+                {age_clause}
                 ORDER BY posted_at DESC, id DESC
                 LIMIT ?
-            """, (limit,))
+            """, params)
             rows = cursor.fetchall()
 
         results = []

@@ -52,7 +52,7 @@ class SiteGenerator:
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         DEALS_DIR.mkdir(parents=True, exist_ok=True)
 
-        deals = self.db.get_recent_deals(limit=60)
+        deals = self.db.get_recent_deals(limit=config.site_max_items, max_age_days=config.site_max_age_days)
 
         # 今回の新規dealがまだDBに入る前でも先頭に反映されるようにマージ
         if latest_deal:
@@ -70,6 +70,7 @@ class SiteGenerator:
                 "posted_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             }
             deals = [ latest_dict ] + [d for d in deals if d["asin"] != latest_deal.asin]
+            deals = deals[:config.site_max_items]
 
         now_str = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
 
@@ -79,9 +80,13 @@ class SiteGenerator:
         index_path.write_text(index_html, encoding="utf-8")
 
         # 2. 各商品の個別クッションページ (docs/deals/<ASIN>.html) の生成
-        for target in deals:
-            other_deals = [d for d in deals if d["asin"] != target["asin"]][:24]
+        # 掲載数が多くなるため、毎回全ページを書き直さない (git差分の肥大化防止)。
+        # 新規ページ(未生成)と、最新30件のみ更新する。
+        for idx, target in enumerate(deals):
             deal_path = DEALS_DIR / f"{target['asin']}.html"
+            if deal_path.exists() and idx >= 30:
+                continue
+            other_deals = [d for d in deals if d["asin"] != target["asin"]][:24]
             deal_html = self._render_deal_page_html(target, other_deals, now_str)
             deal_path.write_text(deal_html, encoding="utf-8")
 
@@ -603,6 +608,9 @@ class SiteGenerator:
     <div class="deals-grid" id="dealsGrid">
       {cards_html}
     </div>
+    <div style="text-align:center;margin:22px 0;">
+      <button id="moreBtn" class="sort-btn" style="padding:12px 28px;font-size:1rem;display:none;">もっと見る</button>
+    </div>
   </main>
 
   <footer class="site-footer">
@@ -650,28 +658,41 @@ class SiteGenerator:
       `;
     }})();
 
-    // フィルタリング＆ソート処理
+    // フィルタリング＆ソート＆「もっと見る」処理
+    const PAGE_SIZE = 50;
+    let visibleLimit = PAGE_SIZE;
     const grid = document.getElementById("dealsGrid");
     const cards = Array.from(grid.querySelectorAll(".deal-card"));
     const searchInput = document.getElementById("searchInput");
+    const moreBtn = document.getElementById("moreBtn");
     let currentCat = "すべて";
 
     function applyFilter() {{
       const q = searchInput.value.trim().toLowerCase();
-      cards.forEach(card => {{
+      let shown = 0, matched = 0;
+      Array.from(grid.querySelectorAll(".deal-card")).forEach(card => {{
         const matchCat = (currentCat === "すべて" || card.dataset.category === currentCat);
         const matchText = (!q || card.dataset.title.includes(q));
-        card.style.display = (matchCat && matchText) ? "" : "none";
+        if (matchCat && matchText) {{
+          matched++;
+          if (shown < visibleLimit) {{ card.style.display = ""; shown++; }} else {{ card.style.display = "none"; }}
+        }} else {{
+          card.style.display = "none";
+        }}
       }});
+      moreBtn.style.display = (matched > shown) ? "" : "none";
+      moreBtn.textContent = "もっと見る (残り" + (matched - shown) + "件)";
     }}
 
-    searchInput.addEventListener("input", applyFilter);
+    moreBtn.addEventListener("click", () => {{ visibleLimit += PAGE_SIZE; applyFilter(); }});
+    searchInput.addEventListener("input", () => {{ visibleLimit = PAGE_SIZE; applyFilter(); }});
 
     document.querySelectorAll(".cat-btn").forEach(btn => {{
       btn.addEventListener("click", () => {{
         document.querySelectorAll(".cat-btn").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         currentCat = btn.dataset.cat;
+        visibleLimit = PAGE_SIZE;
         applyFilter();
       }});
     }});
@@ -690,8 +711,12 @@ class SiteGenerator:
           sorted.sort((a, b) => Number(a.dataset.price) - Number(b.dataset.price));
         }}
         sorted.forEach(c => grid.appendChild(c));
+        visibleLimit = PAGE_SIZE;
+        applyFilter();
       }});
     }});
+
+    applyFilter();
   </script>
 </body>
 </html>
