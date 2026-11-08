@@ -107,6 +107,30 @@ class SiteGenerator:
         except Exception as e:
             logger.warning(f"Git自動Pushをスキップしました: {e}")
 
+    def wait_until_live(self, asin: str, timeout: int = 300, interval: int = 15) -> bool:
+        """公開サイト上に商品ページ(deals/<ASIN>.html)が表示可能になるまで待つ。
+        SNS投稿より先にページが公開されていることを保証し、リンク先が404になるのを防ぐ。"""
+        import time
+        import requests
+
+        base = (self.base_url or "").rstrip("/")
+        if not base:
+            return True  # 公開URL未設定(Amazon直リンク運用)なら待機不要
+        url = f"{base}/deals/{asin}.html"
+        deadline = time.time() + timeout
+        while True:
+            try:
+                res = requests.get(url, timeout=10, headers={"Cache-Control": "no-cache"})
+                if res.status_code == 200 and asin in res.text:
+                    logger.info(f"✅ 公開ページを確認しました: {url}")
+                    return True
+            except Exception:
+                pass
+            if time.time() >= deadline:
+                logger.error(f"⚠️ {timeout}秒待っても公開ページが表示されません: {url}")
+                return False
+            time.sleep(interval)
+
     def _render_card_html(self, d: dict, is_root: bool = True) -> str:
         asin = html.escape(d["asin"])
         title = html.escape(d["title"])

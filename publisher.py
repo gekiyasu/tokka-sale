@@ -551,12 +551,21 @@ class MultiPublisher:
 
         # 大特価まとめサイト (docs/index.html & docs/deals/<ASIN>.html) を自動更新
         # SNS投稿の成否に関わらず、スキャンで確認できた商品は必ずサイトへ反映する
+        site_ready = True
         if config.enable_site_generation:
             try:
                 from site_generator import SiteGenerator
-                SiteGenerator().build_site(latest_deal=deal)
+                site_gen = SiteGenerator()
+                site_gen.build_site(latest_deal=deal)
+                # 商品ページが公開サイト上で見えるようになってからSNS投稿する (リンク切れ防止)
+                if config.auto_git_push:
+                    site_ready = site_gen.wait_until_live(deal.asin)
             except Exception as e:
                 logger.warning(f"まとめサイト生成中にエラーが発生しました: {e}")
+                site_ready = False
+        if not site_ready:
+            logger.warning(f"サイト側のページが未公開のためSNS投稿を見送ります: {deal.asin}")
+            return 0
 
         success_count = 0
         any_enabled = False
