@@ -1,11 +1,14 @@
 import time
+import random
 import logging
 import argparse
-import schedule
+from datetime import datetime, timedelta, timezone
 from config import config
 from db import Database
 from deals_tracker import DealsTracker
 from publisher import MultiPublisher
+
+JST = timezone(timedelta(hours=9))
 
 # ログ設定
 logging.basicConfig(
@@ -15,13 +18,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AmazonSaleBot")
 
-def run_job(tracker: DealsTracker, db: Database, publisher: MultiPublisher, force: bool = False, limit: int = 3):
+def run_job(tracker: DealsTracker, db: Database, publisher: MultiPublisher, force: bool = False, limit: int = 3) -> int:
     logger.info("🔍 セール商品のスキャンを開始します...")
     deals = tracker.fetch_deals()
     
     if not deals:
         logger.info("該当するセール商品はありませんでした。")
-        return
+        return 0
 
     logger.info(f"{len(deals)}件のセール候補を取得しました。")
     posted_count = 0
@@ -54,6 +57,55 @@ def run_job(tracker: DealsTracker, db: Database, publisher: MultiPublisher, forc
         time.sleep(10)
 
     logger.info(f"スキャン完了: {posted_count}件の新規セールを配信しました。")
+    return posted_count
+
+def calculate_next_wait_seconds(posted: bool) -> tuple[int, datetime]:
+    """
+    次回巡回までの待機秒数と次回予定時刻(JST)を算出。
+    毎回ランダムな揺らぎ（Jitter）を持たせ、機械的な定時投稿を回避します。
+    - 投稿成功時 / 通常時: 基準(例:120分) ± 揺らぎ(例:25分) + 秒揺らぎ (例: 1時間47分, 2時間7分 等)
+    - 候補なし時: 新着を逃さないよう短め (20〜35分)
+    - 夜間(23:00〜8:00 JST): アカウント保護のため明朝8時台まで休止待機
+    """
+    now_jst = datetime.now(JST)
+
+    # 1. 夜間休止判定 (23:00〜翌朝8:00)
+    if now_jst.hour >= 23 or now_jst.hour < 8:
+        if now_jst.hour >= 23:
+            target_date = (now_jst + timedelta(days=1)).date()
+        else:
+            target_date = now_jst.date()
+        # 翌朝 8:05 〜 8:30 のランダムな時刻に再開
+        target_time = datetime(target_date.year, target_date.month, target_date.day, 8, 0, 0, tzinfo=JST)
+        target_time += timedelta(minutes=random.randint(5, 30), seconds=random.randint(0, 59))
+        wait_seconds = max(60, int((target_time - now_jst).total_seconds()))
+        return wait_seconds, target_time
+
+    # 2. 日中の間隔計算
+    base_min = config.check_interval_minutes
+    jitter_min = config.interval_jitter_minutes
+
+    if posted:
+        # 投稿があった場合: 基準値 ± 揺らぎ幅 + 秒単位の揺らぎ
+        min_min = max(30, base_min - jitter_min)
+        max_min = max(min_min + 5, base_min + jitter_min)
+        rand_min = random.randint(min_min, max_min)
+    else:
+        # 投稿がなかった場合: 短めの揺らぎで新着をチェック
+        rand_min = random.randint(20, 35)
+
+    rand_sec = random.randint(0, 59)
+    wait_seconds = rand_min * 60 + rand_sec
+    target_time = now_jst + timedelta(seconds=wait_seconds)
+
+    # もし次回予定が夜間に入ってしまう場合は、明朝8時台にシフト
+    if target_time.hour >= 23:
+        target_date = (now_jst + timedelta(days=1)).date()
+        target_time = datetime(target_date.year, target_date.month, target_date.day, 8, 0, 0, tzinfo=JST)
+        target_time += timedelta(minutes=random.randint(5, 30), seconds=random.randint(0, 59))
+        wait_seconds = max(60, int((target_time - now_jst).total_seconds()))
+
+    return wait_seconds, target_time
 
 def main():
     parser = argparse.ArgumentParser(description="Amazon Sale Affiliate Bot")
@@ -72,17 +124,30 @@ def main():
         run_job(tracker, db, publisher, force=args.force, limit=args.count)
         return
 
-    # 定期実行スケジュール
-    interval = config.check_interval_minutes
-    schedule.every(interval).minutes.do(run_job, tracker, db, publisher, limit=args.count)
-    logger.info(f"⏳ {interval}分ごとに定期スキャン（最大{args.count}件/回）を実行します。(Ctrl+Cで停止)")
-
-    # 初回即時実行
-    run_job(tracker, db, publisher, limit=args.count)
+    logger.info(f"⏳ 巡回間隔: 基準{config.check_interval_minutes}分 (±{config.interval_jitter_minutes}分のランダム揺らぎ付き) で常駐監視を開始します。(Ctrl+Cで停止)")
 
     while True:
-        schedule.run_pending()
-        time.sleep(1)
+        try:
+            posted_count = run_job(tracker, db, publisher, limit=args.count)
+        except Exception as e:
+            logger.error(f"❌ スキャン実行中に予期せぬエラーが発生しました: {e}", exc_info=True)
+            posted_count = 0
+
+        # 次回待機時間の計算（毎回ランダムに変動）
+        wait_seconds, next_time = calculate_next_wait_seconds(posted=bool(posted_count > 0))
+        hours = wait_seconds // 3600
+        mins = (wait_seconds % 3600) // 60
+        secs = wait_seconds % 60
+        time_str = f"{hours}時間{mins}分{secs}秒" if hours > 0 else f"{mins}分{secs}秒"
+
+        logger.info(f"☕ 待機中... 次回巡回予定: {next_time.strftime('%Y-%m-%d %H:%M:%S')} (約{time_str}後)")
+
+        # 安全なスリープ（Ctrl+Cですぐ停止できるように細かく待機）
+        remaining = wait_seconds
+        while remaining > 0:
+            step = min(remaining, 5)
+            time.sleep(step)
+            remaining -= step
 
 if __name__ == "__main__":
     main()

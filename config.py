@@ -17,7 +17,8 @@ class Config:
     min_discount_percent: int = int(os.getenv("MIN_DISCOUNT_PERCENT", "20"))
     min_rating: float = float(os.getenv("MIN_RATING", "3.8"))
     min_reviews_count: int = int(os.getenv("MIN_REVIEWS_COUNT", "10"))
-    check_interval_minutes: int = int(os.getenv("CHECK_INTERVAL_MINUTES", "30"))
+    check_interval_minutes: int = int(os.getenv("CHECK_INTERVAL_MINUTES", "120"))
+    interval_jitter_minutes: int = int(os.getenv("INTERVAL_JITTER_MINUTES", "25"))
     
     # X (Twitter)
     enable_x: bool = os.getenv("ENABLE_X", "false").lower() in ("true", "1", "yes")
