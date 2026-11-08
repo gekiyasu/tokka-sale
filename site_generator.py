@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from config import config
-from db import Database
+from db import Database, normalize_category, CATEGORIES
 from models import ProductDeal
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ class SiteGenerator:
                 "image_url": latest_deal.image_url,
                 "rating": latest_deal.rating,
                 "reviews_count": latest_deal.reviews_count,
-                "category": latest_deal.category or "注目セール",
+                "category": normalize_category(latest_deal.category, latest_deal.title),
                 "affiliate_url": latest_deal.affiliate_url or latest_deal.generate_affiliate_url(config.amazon_tag),
                 "posted_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             }
@@ -293,7 +293,7 @@ class SiteGenerator:
           gap: 6px;
           flex-wrap: wrap;
         }
-        .sort-btn, .cat-btn {
+        .sort-btn, .cat-btn, .more-btn {
           border: 1px solid var(--border);
           background: #f8fafc;
           color: var(--text);
@@ -304,7 +304,7 @@ class SiteGenerator:
           cursor: pointer;
           transition: all 0.15s;
         }
-        .sort-btn:hover, .cat-btn:hover { border-color: #94a3b8; }
+        .sort-btn:hover, .cat-btn:hover, .more-btn:hover { border-color: #94a3b8; }
         .sort-btn.active {
           background: var(--accent);
           color: #fff;
@@ -546,10 +546,10 @@ class SiteGenerator:
 
     def _render_index_html(self, deals: List[dict], now_str: str) -> str:
         cards_html = "\n".join(self._render_card_html(d, is_root=True) for d in deals)
-        categories = ["すべて"]
-        for d in deals:
-            if d["category"] not in categories:
-                categories.append(d["category"])
+        # カテゴリは統一リスト(CATEGORIES)の順で、掲載商品が存在するものだけ表示
+        present = {d["category"] for d in deals}
+        categories = ["すべて"] + [c for c in CATEGORIES if c in present]
+        categories += sorted(c for c in present if c not in CATEGORIES)
 
         cat_buttons = "\n".join(
             f'<button class="cat-btn{" active" if c == "すべて" else ""}" data-cat="{html.escape(c)}">{html.escape(c)}</button>'
@@ -609,7 +609,7 @@ class SiteGenerator:
       {cards_html}
     </div>
     <div style="text-align:center;margin:22px 0;">
-      <button id="moreBtn" class="sort-btn" style="padding:12px 28px;font-size:1rem;display:none;">もっと見る</button>
+      <button id="moreBtn" class="more-btn" style="padding:12px 28px;font-size:1rem;display:none;">もっと見る</button>
     </div>
   </main>
 

@@ -6,6 +6,41 @@ from config import config
 
 DB_PATH = Path(__file__).parent / "deals_history.db"
 
+# サイト表示用の統一カテゴリ (これ以外の表記ゆれは normalize_category で寄せる)
+CATEGORIES = ["ガジェット", "PC・周辺機器", "家電", "キッチン", "食品・飲料", "日用品", "その他"]
+
+_CATEGORY_ALIASES = {
+    "ガジェット": "ガジェット", "オーディオ": "ガジェット",
+    "PC周辺機器": "PC・周辺機器", "PC・周辺機器": "PC・周辺機器",
+    "PC・スマホ周辺機器": "PC・周辺機器", "ストレージ": "PC・周辺機器",
+    "家電": "家電",
+    "キッチン": "キッチン",
+    "食品・飲料": "食品・飲料", "飲料・食品": "食品・飲料", "飲料・食品・": "食品・飲料",
+    "日用品": "日用品", "ホーム": "日用品",
+}
+
+_KEYWORDS = [  # 上から順に判定 (曖昧なカテゴリ名・未分類のときにタイトルから推定)
+    ("食品・飲料", ["コーラ", "炭酸水", "天然水", "ミネラルウォーター", "お茶", "麦茶", "レッドブル", "飲料", "ラベルレス",
+                "ビール", "コーヒー", "珈琲", "プロテイン", "ご飯", "カップ麺", "ラーメン", "お菓子", "ドリップ", "ジュース", "水 "]),
+    ("PC・周辺機器", ["マウス", "SSD", "キーボード", "モニター", "USBハブ", "USB-C ハブ", "ハブ", "フラッシュメモリ", "microSD", "SDカード", "HDD", "Logicool", "ロジクール"]),
+    ("ガジェット", ["モバイルバッテリー", "充電器", "イヤホン", "ヘッドホン", "ケーブル", "スマートウォッチ", "Fire TV", "Anker", "UGREEN", "Bluetooth", "ポータブル電源", "乾電池", "電池", "スマホ"]),
+    ("キッチン", ["フライパン", "保存容器", "鍋", "弁当", "包丁", "まな板", "食器", "ケトル", "食パン袋", "密閉"]),
+    ("日用品", ["洗剤", "シャンプー", "ボディソープ", "ハンドソープ", "ティッシュ", "トイレット", "歯磨き", "マウスウォッシュ", "マスク", "ゴミ袋", "ブラシ", "柔軟剤", "詰替", "詰め替え"]),
+    ("家電", ["冷蔵庫", "洗濯機", "掃除機", "電子レンジ", "空気清浄機", "サーキュレーター", "アイロン", "炊飯器", "ドライヤー", "家電", "エアコン", "扇風機"]),
+]
+
+
+def normalize_category(raw: Optional[str], title: str = "") -> str:
+    """カテゴリの表記ゆれを統一カテゴリ(CATEGORIES)へ寄せる。
+    既知の表記はそのまま変換し、複合・未分類の表記(例: 家電・日用品, 注目セール)はタイトルから推定する。"""
+    raw = (raw or "").strip()
+    if raw in _CATEGORY_ALIASES:
+        return _CATEGORY_ALIASES[raw]
+    for cat, words in _KEYWORDS:
+        if any(w in title for w in words):
+            return cat
+    return "その他"
+
 class Database:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
@@ -76,7 +111,7 @@ class Database:
         image_url = deal.image_url if deal else f"https://images-na.ssl-images-amazon.com/images/P/{asin}.01._SCLZZZZZZZ_.jpg"
         rating = deal.rating if deal else 4.2
         reviews_count = deal.reviews_count if deal else 100
-        category = deal.category if deal else "注目セール"
+        category = normalize_category(deal.category if deal else "", title)
         affiliate_url = (
             deal.affiliate_url
             if (deal and deal.affiliate_url)
@@ -143,17 +178,7 @@ class Database:
             img = r["image_url"] or f"https://images-na.ssl-images-amazon.com/images/P/{asin}.01._SCLZZZZZZZ_.jpg"
             aff_url = r["affiliate_url"] or f"https://www.amazon.co.jp/dp/{asin}?tag={config.amazon_tag}"
             title = r["title"] or f"Amazon 特価商品 ({asin})"
-            cat = r["category"] or "注目セール"
-            # タイトルからカテゴリを簡易推定（過去データ補完用）
-            if cat == "注目セール":
-                if any(k in title for k in ["コーラ", "水", "お茶", "レッドブル", "飲料", "ラベルレス", "ビール", "コーヒー"]):
-                    cat = "飲料・食品"
-                elif any(k in title for k in ["Anker", "モバイルバッテリー", "充電器", "イヤホン", "ケーブル", "Philips", "UGREEN", "CIO"]):
-                    cat = "ガジェット"
-                elif any(k in title for k in ["マウス", "SSD", "バッファロー", "ロジクール", "エレコム", "キーボード", "モニター"]):
-                    cat = "PC・周辺機器"
-                elif any(k in title for k in ["アイリス", "冷蔵庫", "洗濯機", "掃除機", "電子レンジ", "家電"]):
-                    cat = "家電・日用品"
+            cat = normalize_category(r["category"], title)
 
             results.append({
                 "asin": asin,
