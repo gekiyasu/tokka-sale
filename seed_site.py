@@ -55,6 +55,9 @@ SEARCH_SOURCES = [
     ("食品・飲料", "プロテイン セール"), ("食品・飲料", "カップ麺 まとめ買い"),
     ("日用品", "ティッシュ まとめ買い"), ("日用品", "洗剤 詰め替え セール"),
     ("日用品", "トイレットペーパー セール"), ("日用品", "シャンプー セール"),
+    ("日用品", "ボディソープ セール"), ("日用品", "歯磨き粉 まとめ買い"),
+    ("日用品", "ハンドソープ 詰め替え"), ("日用品", "マスク 箱"),
+    ("日用品", "洗濯洗剤 ジェルボール"), ("日用品", "ゴミ袋 セール"),
     ("キッチン", "フライパン セール"), ("キッチン", "保存容器 セール"),
 ]
 
@@ -108,7 +111,7 @@ def main():
     for asin, category in candidates:
         if added >= args.count:
             break
-        if cat_count.get(category, 0) >= 6:  # 分野の偏りを抑える
+        if cat_count.get(category, 0) >= 8:  # 分野の偏りを抑える
             continue
         deal = ProductDeal(
             asin=asin, title="Amazon注目セール商品", current_price=1000, regular_price=1500,
@@ -119,6 +122,10 @@ def main():
         deal.generate_affiliate_url(config.amazon_tag)
         time.sleep(2)
         if not tracker.sync_live_amazon_data(deal):
+            continue
+        # 交換部品・消耗パーツ・互換品などは掲載しない
+        if any(w in deal.title for w in ["交換用", "互換", "糸くずフィルター", "対応 フィルター", "替えブラシ", "純正部品", "リモコンのみ"]):
+            logger.info(f"部品・互換品のためスキップ: {asin} {deal.title[:30]}")
             continue
         # 品質フィルタ: 割引率・評価・レビュー数
         if deal.discount_percent < 10 or (deal.rating and deal.rating < 3.8) or deal.reviews_count < 10:
