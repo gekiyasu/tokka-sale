@@ -134,11 +134,11 @@ def main():
 
         db.record_post(asin, deal.current_price, deal.discount_percent, deal.title, deal=deal)
         # X投稿の重複判定(24h)に影響しないよう、掲載日時を少し過去にずらす
-        offset = random.randint(25, 70)
+        offset = random.randint(25 * 60, 25 * 60 + 600)  # 25〜35時間前 (分)
         with db._get_connection() as conn:
             conn.execute(
                 "UPDATE posted_deals SET posted_at = datetime('now', ?) WHERE id = (SELECT MAX(id) FROM posted_deals WHERE asin = ?)",
-                (f"-{offset} minutes -25 hours", asin),
+                (f"-{offset} minutes", asin),
             )
             conn.commit()
         cat_count[category] = cat_count.get(category, 0) + 1
