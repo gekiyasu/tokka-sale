@@ -519,14 +519,6 @@ class MultiPublisher:
         if not DealsTracker().sync_live_amazon_data(deal):
             return 0
 
-        # 大特価まとめサイト (docs/index.html & docs/deals/<ASIN>.html) を自動更新
-        if config.enable_site_generation:
-            try:
-                from site_generator import SiteGenerator
-                SiteGenerator().build_site(latest_deal=deal)
-            except Exception as e:
-                logger.warning(f"まとめサイト生成中にエラーが発生しました: {e}")
-
         success_count = 0
         any_enabled = False
         for pub in self.publishers:
@@ -534,6 +526,15 @@ class MultiPublisher:
                 any_enabled = True
                 if pub.publish(deal):
                     success_count += 1
+
+        # 大特価まとめサイト (docs/index.html & docs/deals/<ASIN>.html) を自動更新
+        # SNS投稿が1つ以上成功した場合(または全SNS無効のデモ時)のみ、新商品をサイトへ反映して公開する
+        if config.enable_site_generation and (success_count > 0 or not any_enabled):
+            try:
+                from site_generator import SiteGenerator
+                SiteGenerator().build_site(latest_deal=deal)
+            except Exception as e:
+                logger.warning(f"まとめサイト生成中にエラーが発生しました: {e}")
         
         if not any_enabled:
             # どのSNSも有効化されていない場合はコンソールにシミュレーション出力
