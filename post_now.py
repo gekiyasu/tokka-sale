@@ -20,6 +20,21 @@ def main():
     print("=" * 60)
 
     db = Database()
+
+    # 前回の投稿から20分間隔を確保
+    with db._get_connection() as conn:
+        last_str = conn.cursor().execute("SELECT MAX(posted_at) FROM posted_deals").fetchone()[0]
+    if last_str:
+        from datetime import datetime, timezone, timedelta
+        JST = timezone(timedelta(hours=9))
+        last_dt = datetime.strptime(last_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).astimezone(JST)
+        target_time = last_dt + timedelta(minutes=20)
+        now_jst = datetime.now(JST)
+        diff = (target_time - now_jst).total_seconds()
+        if diff > 0:
+            print(f"⏳ 前回の投稿から20分空けるため、あと {int(diff)}秒 待機します (投稿開始予定: {target_time.strftime('%H:%M:%S')})...")
+            time.sleep(diff)
+
     tracker = DealsTracker()
     deals = tracker.fetch_deals()
 

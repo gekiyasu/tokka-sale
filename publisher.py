@@ -101,6 +101,25 @@ class XPublisher(BasePublisher):
         )
         return driver
 
+    def _wait_for_page_deployment(self, url: str, timeout: int = 150) -> bool:
+        """GitHub Pages等のクッションページが実際にインターネット上で 200 OK になるまで待機"""
+        if not url or not url.startswith("http"):
+            return True
+        logger.info(f"⏳ クッションページの公開反映(200 OK)を待機しています: {url}")
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                res = requests.get(url, timeout=6)
+                if res.status_code == 200 and len(res.text) > 1000:
+                    logger.info(f"✅ クッションページの公開を確認しました (経過: {int(time.time() - start)}秒)")
+                    time.sleep(3.0)
+                    return True
+            except Exception:
+                pass
+            time.sleep(5)
+        logger.warning(f"⚠️ クッションページの反映確認がタイムアウトしました ({timeout}秒)")
+        return False
+
     def _publish_via_selenium(self, deal: ProductDeal) -> bool:
         if not self.profile_dir.exists():
             logger.warning(
@@ -118,9 +137,14 @@ class XPublisher(BasePublisher):
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
 
+        share_url = deal.get_share_url(config.site_base_url)
+
+        # OGPリンクカードを確実に表示させるため、Webページが公開(200 OK)されるまで待機
+        if not config.x_attach_image and share_url.startswith("http"):
+            self._wait_for_page_deployment(share_url, timeout=120)
+
         # 画像は添付せず、URLのOGPカード(summary_large_image)で表示する → 画像タップでサイトへ遷移できる
         temp_img = self._prepare_x_image(deal.image_url) if config.x_attach_image else None
-        share_url = deal.get_share_url(config.site_base_url)
         text = deal.format_x_post_text(share_url=share_url)
         driver = None
 
@@ -177,12 +201,16 @@ class XPublisher(BasePublisher):
             )
             time.sleep(1.5)
 
-            # 万一ペーストイベントで入らなかった場合のフォールバック (BMP範囲内の文字で入力)
-            entered_text = textarea.text.strip()
+            # 万一ペーストイベントで入らなかった場合のフォールバック
+            entered_text = driver.execute_script("return (arguments[0].innerText || arguments[0].textContent || '').trim();", textarea)
             if not entered_text:
                 bmp_text = "".join(c for c in text if ord(c) <= 0xFFFF)
                 textarea.send_keys(bmp_text)
                 time.sleep(1.0)
+
+            # XがURLをリンクカードとして認識・展開するトリガーとして改行を投入
+            textarea.send_keys(Keys.ENTER)
+            time.sleep(1.0)
 
             # 商品画像の添付
             if temp_img and temp_img.exists():
@@ -196,12 +224,14 @@ class XPublisher(BasePublisher):
                 except Exception as img_err:
                     logger.warning(f"[X-Selenium] 画像添付をスキップしました: {img_err}")
 
-            # リンクカード(画像プレビュー)が生成されるのを待つ (最大12秒)
+            # リンクカード(画像プレビュー)が生成されるのを待つ (最大20秒)
             if not (temp_img and temp_img.exists()):
                 try:
-                    WebDriverWait(driver, 12).until(
+                    WebDriverWait(driver, 20).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="card.wrapper"]'))
                     )
+                    # カード内部の画像プレビューが安定するまで少し待機
+                    time.sleep(4.0)
                     logger.info("[X-Selenium] リンクカードの生成を確認しました")
                 except Exception:
                     logger.warning("[X-Selenium] リンクカードを確認できませんでした(リンクのみで投稿します)")

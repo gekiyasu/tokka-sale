@@ -741,6 +741,8 @@ class SiteGenerator:
 
         other_cards = "\n".join(self._render_card_html(d, is_root=False) for d in other_deals)
 
+        deal_page_url = f"{self.base_url}/deals/{asin}.html" if self.base_url else ""
+
         return f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -748,8 +750,11 @@ class SiteGenerator:
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{og_title} - {html.escape(self.site_title)}</title>
   <meta name="description" content="{html.escape(og_desc)}">
+  <link rel="canonical" href="{deal_page_url}">
   <meta property="og:title" content="{og_title}">
   <meta property="og:description" content="{html.escape(og_desc)}">
+  <meta property="og:url" content="{deal_page_url}">
+  <meta property="og:site_name" content="{html.escape(self.site_title)}">
   <meta property="og:image" content="{img}">
   <meta property="og:type" content="article">
   <meta name="twitter:card" content="summary_large_image">
