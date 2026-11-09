@@ -2,6 +2,18 @@ import random
 from dataclasses import dataclass
 from typing import Optional
 
+def _x_weighted_length(text: str) -> int:
+    """Xの文字数カウント: URLは一律23、半角(英数・記号)は1、全角・絵文字等は2"""
+    import re
+    url_re = re.compile(r"https?://\S+")
+    total = 23 * len(url_re.findall(text))
+    rest = url_re.sub("", text)
+    for ch in rest:
+        o = ord(ch)
+        total += 1 if (o <= 0x10FF or 0x2000 <= o <= 0x200D or 0x2010 <= o <= 0x201F or 0x2032 <= o <= 0x2037) else 2
+    return total
+
+
 @dataclass
 class ProductDeal:
     asin: str
@@ -79,9 +91,6 @@ class ProductDeal:
         ]
         chosen_tags = random.choice(tag_pools)
 
-        if len(title_summary) > 55:
-            title_summary = title_summary[:52] + "..."
-
         target_url = share_url or self.affiliate_url
 
         # 毎回同じ文面だと「重複・スパム」と判定されやすいため、複数テンプレートをランダムに使い分ける
@@ -91,9 +100,27 @@ class ProductDeal:
             "{title}\n\n💰￥{cur}\n（参考価格￥{reg}から{d}%OFF）\n{url}\n\n{tags}",
             "本日のお得情報✨\n{title}\n\n{d}%OFFの￥{cur}\n{url}\n\n{tags}",
         ]
-        text = random.choice(templates).format(
-            title=title_summary, d=self.discount_percent,
-            reg=f"{self.regular_price:,}", cur=f"{self.current_price:,}",
-            url=target_url, tags=chosen_tags,
-        )
+        template = random.choice(templates)
+
+        def build(title: str) -> str:
+            return template.format(
+                title=title, d=self.discount_percent,
+                reg=f"{self.regular_price:,}", cur=f"{self.current_price:,}",
+                url=target_url, tags=chosen_tags,
+            )
+
+        text = build(title_summary)
+        # Xの重み付き文字数 (上限280) を超える場合のみ、単語の区切りで自然に短縮する
+        if _x_weighted_length(text) > 280:
+            title = title_summary
+            while len(title) > 15:
+                title = title[:-1]
+                # 区切り (スペース・括弧・記号) の直後まで戻して単語途中の切断を避ける
+                cut = max(title.rfind(" "), title.rfind("　"), title.rfind("/"), title.rfind("、"))
+                candidate = (title[:cut].rstrip() if cut >= 15 else title) + "…"
+                if _x_weighted_length(build(candidate)) <= 280:
+                    return build(candidate)
+                if cut >= 15:
+                    title = title[:cut]
+            text = build(title[:15] + "…")
         return text
