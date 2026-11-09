@@ -23,15 +23,15 @@ JST = timezone(timedelta(hours=9))
 # --- 設定 (必要なら調整) ---
 ACTIVE_HOUR_START = 8      # JST 8:00 から
 ACTIVE_HOUR_END = 23       # JST 23:00 まで (23:00 以降は投稿しない)
-BASE_GAP_MINUTES = config.check_interval_minutes     # 基本の投稿間隔 (デフォルト120分)
-GAP_JITTER = (0.8, 1.25)   # 間隔の揺らぎ倍率 (例: 120分なら 96分〜150分 / 1時間36分〜2時間30分)
+BASE_GAP_MINUTES = config.check_interval_minutes     # 基本の投稿間隔 (デフォルト50分)
+GAP_JITTER = (0.85, 1.2)   # 間隔の揺らぎ倍率 (例: 50分なら 42分〜60分)
 FAIL_BREAKER_COUNT = 3     # 連続失敗でストップ
 FAIL_PAUSE_HOURS = 6
 LOCK_PAUSE_HOURS = 48      # ロック/確認要求を検知した場合の停止時間
 
 # ウォームアップ: (経過日数の上限, 1日の投稿上限)
-WARMUP = [(3, 2), (7, 4), (14, 6)]
-FINAL_DAILY_LIMIT = 8
+WARMUP = [(2, 8), (5, 14)]
+FINAL_DAILY_LIMIT = 18
 
 
 def _now() -> datetime:
