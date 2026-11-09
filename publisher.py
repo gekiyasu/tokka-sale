@@ -208,9 +208,11 @@ class XPublisher(BasePublisher):
                 textarea.send_keys(bmp_text)
                 time.sleep(1.0)
 
-            # XがURLをリンクカードとして認識・展開するトリガーとして改行を投入
-            textarea.send_keys(Keys.ENTER)
-            time.sleep(1.0)
+            # Xのオートコンプリート候補(ハッシュタグ等のサジェストポップアップ)が開いていればEscapeキーで確実に閉じる
+            # ※末尾でEnterを押すとトレンドタグ(サジェスト先頭候補)が誤確定されてしまうため、Enterは送信しない
+            time.sleep(0.5)
+            textarea.send_keys(Keys.ESCAPE)
+            time.sleep(0.5)
 
             # 商品画像の添付
             if temp_img and temp_img.exists():

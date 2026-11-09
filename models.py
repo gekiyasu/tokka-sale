@@ -52,15 +52,15 @@ class ProductDeal:
             title_summary = title_summary.replace(clutter, "").strip()
 
         tag_pools = [
-            "#Amazonセール #PR",
-            "#Amazonタイムセール #PR",
-            "#Amazon特売 #お得情報 #PR",
-            "#タイムセール速報 #Amazon #PR",
+            "#Amazonセール #タイムセール",
+            "#Amazon特売 #お得情報",
+            "#タイムセール速報 #Amazon",
+            "#Amazonセール",
         ]
         chosen_tags = random.choice(tag_pools)
 
         full_text = (
-            f"{title_summary}\n\n"
+            f"【PR】{title_summary}\n\n"
             f"{self.discount_percent}%OFF🉐\n"
             f"￥{self.regular_price:,}➡️￥{self.current_price:,}\n\n"
             f"{chosen_tags}"
@@ -70,7 +70,7 @@ class ProductDeal:
             excess = len(full_text) - max_length
             title_summary = title_summary[:max(15, len(title_summary) - excess - 3)] + "..."
             full_text = (
-                f"{title_summary}\n\n"
+                f"【PR】{title_summary}\n\n"
                 f"{self.discount_percent}%OFF🉐\n"
                 f"￥{self.regular_price:,}➡️￥{self.current_price:,}\n\n"
                 f"{chosen_tags}"
@@ -84,21 +84,21 @@ class ProductDeal:
             title_summary = title_summary.replace(clutter, "").strip()
 
         tag_pools = [
-            "#Amazonセール #PR",
-            "#Amazonタイムセール #PR",
-            "#Amazon特売 #お得情報 #PR",
-            "#タイムセール速報 #Amazon #PR",
+            "#Amazon #Amazonセール",
+            "#Amazonセール #タイムセール",
+            "#Amazon特売 #お得情報",
+            "#タイムセール速報 #Amazon",
         ]
         chosen_tags = random.choice(tag_pools)
 
         target_url = share_url or self.affiliate_url
 
-        # 毎回同じ文面だと「重複・スパム」と判定されやすいため、複数テンプレートをランダムに使い分ける
+        # ステマ規制対策として文頭に【PR】を必ず明記し、複数テンプレートをランダムに使い分ける
         templates = [
-            "{title}\n\n🔥{d}%OFF🉐\n￥{reg}➡️￥{cur}\n👇特価詳細・セール一覧\n{url}\n\n{tags}",
-            "【特価】{title}\n\n￥{cur}（通常￥{reg} / {d}%OFF）\n詳細はこちら👇\n{url}\n\n{tags}",
-            "{title}\n\n💰￥{cur}\n（参考価格￥{reg}から{d}%OFF）\n{url}\n\n{tags}",
-            "本日のお得情報✨\n{title}\n\n{d}%OFFの￥{cur}\n{url}\n\n{tags}",
+            "【PR】{title}\n\n🔥{d}%OFF🉐\n￥{reg}➡️￥{cur}\n👇特価詳細・セール一覧\n{url}\n\n{tags}",
+            "【PR / 特価】{title}\n\n￥{cur}（通常￥{reg} / {d}%OFF）\n詳細はこちら👇\n{url}\n\n{tags}",
+            "【PR】{title}\n\n💰￥{cur}\n（参考価格￥{reg}から{d}%OFF）\n{url}\n\n{tags}",
+            "【PR】本日のお得情報✨\n{title}\n\n{d}%OFFの￥{cur}\n{url}\n\n{tags}",
         ]
         template = random.choice(templates)
 
