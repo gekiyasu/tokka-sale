@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 JST = timezone(timedelta(hours=9))
 DOCS_DIR = Path(__file__).parent / "docs"
 DEALS_DIR = DOCS_DIR / "deals"
+OGP_DIR = DOCS_DIR / "ogp"
 
 
 def _format_jst(utc_str: str) -> str:
@@ -47,10 +48,59 @@ class SiteGenerator:
         self.site_title = config.site_title
         self.base_url = config.site_base_url
 
+    def _generate_deal_ogp_image(self, asin: str, image_url: str) -> Optional[Path]:
+        """商品画像を 1200x630 (1.91:1) の白背景キャンバス中央に配置し、X/Twitter等のリンクカードで絶対に見切れないOGP画像を生成"""
+        if not image_url:
+            return None
+        target_path = OGP_DIR / f"{asin}.jpg"
+        if target_path.exists() and target_path.stat().st_size > 1000:
+            return target_path
+
+        try:
+            import io
+            import requests
+            from PIL import Image
+
+            res = requests.get(image_url, timeout=10)
+            res.raise_for_status()
+            img_bytes = res.content
+            if len(img_bytes) < 1000:
+                return None
+
+            W, H = 1200, 630
+            canvas = Image.new("RGB", (W, H), (255, 255, 255))
+            prod_img = Image.open(io.BytesIO(img_bytes))
+
+            # 透過・アルファチャンネル処理
+            if prod_img.mode in ("RGBA", "P", "LA"):
+                bg = Image.new("RGB", prod_img.size, (255, 255, 255))
+                if prod_img.mode != "RGBA":
+                    prod_img = prod_img.convert("RGBA")
+                bg.paste(prod_img, mask=prod_img.split()[3])
+                prod_img = bg
+            else:
+                prod_img = prod_img.convert("RGB")
+
+            # X(Twitter)リンクカード (1.91:1〜2:1) およびアプリ内角丸でも上下左右が完全に見切れない安全領域
+            # 最大サイズ 900x480 (上下マージン各75px以上、左右マージン各150px以上)
+            prod_img.thumbnail((900, 480), Image.Resampling.LANCZOS)
+            px = (W - prod_img.width) // 2
+            py = (H - prod_img.height) // 2
+            canvas.paste(prod_img, (px, py))
+
+            OGP_DIR.mkdir(parents=True, exist_ok=True)
+            canvas.save(target_path, format="JPEG", quality=88, optimize=True)
+            return target_path
+        except Exception as e:
+            logger.warning(f"OGP画像の生成をスキップしました (ASIN: {asin}): {e}")
+            return None
+
     def build_site(self, latest_deal: Optional[ProductDeal] = None) -> Path:
         """全ページ (`docs/index.html` および `docs/deals/*.html`) を再生成"""
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         DEALS_DIR.mkdir(parents=True, exist_ok=True)
+        OGP_DIR.mkdir(parents=True, exist_ok=True)
+        (DOCS_DIR / ".nojekyll").touch(exist_ok=True)
 
         deals = self.db.get_recent_deals(limit=config.site_max_items, max_age_days=config.site_max_age_days)
 
@@ -558,6 +608,18 @@ class SiteGenerator:
 
         deals_json = json.dumps(deals, ensure_ascii=False)
 
+        top_og_meta = ""
+        if deals and self.base_url:
+            top_asin = deals[0]["asin"]
+            self._generate_deal_ogp_image(top_asin, deals[0].get("image_url", ""))
+            top_ogp = OGP_DIR / f"{top_asin}.jpg"
+            if top_ogp.exists():
+                top_og_img = f"{self.base_url}/ogp/{top_asin}.jpg"
+                top_og_meta = f"""  <meta property="og:image" content="{top_og_img}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:image" content="{top_og_img}">"""
+
         return f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -569,6 +631,7 @@ class SiteGenerator:
   <meta property="og:description" content="Amazonのタイムセール・大幅割引商品をリアルタイム自動更新中！">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary_large_image">
+{top_og_meta}
   <style>{self._common_css()}</style>
 </head>
 <body>
@@ -743,6 +806,13 @@ class SiteGenerator:
 
         deal_page_url = f"{self.base_url}/deals/{asin}.html" if self.base_url else ""
 
+        # X(Twitter)リンクカードで商品全体が完全に見えるよう1200x630白背景のOGP画像を生成
+        ogp_path = self._generate_deal_ogp_image(target["asin"], target.get("image_url", ""))
+        if ogp_path and self.base_url:
+            og_img = f"{self.base_url}/ogp/{asin}.jpg"
+        else:
+            og_img = img
+
         return f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -755,12 +825,14 @@ class SiteGenerator:
   <meta property="og:description" content="{html.escape(og_desc)}">
   <meta property="og:url" content="{deal_page_url}">
   <meta property="og:site_name" content="{html.escape(self.site_title)}">
-  <meta property="og:image" content="{img}">
+  <meta property="og:image" content="{og_img}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
   <meta property="og:type" content="article">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="{og_title}">
   <meta name="twitter:description" content="{html.escape(og_desc)}">
-  <meta name="twitter:image" content="{img}">
+  <meta name="twitter:image" content="{og_img}">
   <style>{self._common_css()}</style>
 </head>
 <body>

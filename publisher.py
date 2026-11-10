@@ -39,7 +39,7 @@ class XPublisher(BasePublisher):
                     self.enabled = False
 
     def _prepare_x_image(self, image_url: str) -> Optional[Path]:
-        """商品画像をダウンロードし、Xのタイムラインで見栄えが良い16:9白背景カード(1200x675)に整形して一時保存"""
+        """商品画像をダウンロードし、Xのタイムライン・リンクカード(1200x630 / 1.91:1)で見切れずに商品全体が収まるよう白背景中央に配置して一時保存"""
         if not image_url:
             return None
         try:
@@ -52,25 +52,27 @@ class XPublisher(BasePublisher):
             import io
             from PIL import Image
 
-            W, H = 1200, 675
+            W, H = 1200, 630
             canvas = Image.new("RGB", (W, H), (255, 255, 255))
             prod_img = Image.open(io.BytesIO(img_bytes))
-            if prod_img.mode in ("RGBA", "P"):
+            if prod_img.mode in ("RGBA", "P", "LA"):
                 bg = Image.new("RGB", prod_img.size, (255, 255, 255))
-                if prod_img.mode == "P":
+                if prod_img.mode != "RGBA":
                     prod_img = prod_img.convert("RGBA")
                 bg.paste(prod_img, mask=prod_img.split()[3])
                 prod_img = bg
             else:
                 prod_img = prod_img.convert("RGB")
 
-            prod_img.thumbnail((1100, 600), Image.Resampling.LANCZOS)
+            # Xのタイムライン表示・カード角丸(border-radius)でも上下左右が一切見切れない安全マージン
+            # 最大サイズ 900x480 (上下マージン各75px以上、左右マージン各150px以上)
+            prod_img.thumbnail((900, 480), Image.Resampling.LANCZOS)
             px = (W - prod_img.width) // 2
             py = (H - prod_img.height) // 2
             canvas.paste(prod_img, (px, py))
 
             temp_path = Path(__file__).parent / "temp_x_post.jpg"
-            canvas.save(temp_path, format="JPEG", quality=92)
+            canvas.save(temp_path, format="JPEG", quality=92, optimize=True)
             return temp_path.resolve()
         except Exception as e:
             logger.warning(f"[X] 商品画像の準備をスキップしました: {e}")
@@ -468,15 +470,15 @@ class BlueskyPublisher(BasePublisher):
         else:
             prod_img = prod_img.convert("RGB")
 
-        # 上下左右に少し余白を持たせて商品全体が100%見えるサイズに縮小
-        max_w, max_h = 1100, 560
+        # 上下左右に十分な余白を持たせて商品全体が100%見えるサイズに縮小 (900x480)
+        max_w, max_h = 900, 480
         prod_img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
         px = (W - prod_img.width) // 2
         py = (H - prod_img.height) // 2
         canvas.paste(prod_img, (px, py))
 
         out = io.BytesIO()
-        canvas.save(out, format="JPEG", quality=92)
+        canvas.save(out, format="JPEG", quality=92, optimize=True)
         return out.getvalue()
 
     def _upload_image(self, image_url: str, deal: ProductDeal = None):
