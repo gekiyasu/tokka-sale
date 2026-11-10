@@ -1,5 +1,5 @@
 """
-今すぐXへ最新セール商品を1件テスト投稿するスクリプト (夜間制限バイパス)
+今すぐXとBlueskyへ最新セール商品を1件テスト投稿するスクリプト (夜間制限バイパス)
 """
 import logging
 import time
@@ -8,15 +8,16 @@ from models import ProductDeal
 from deals_tracker import DealsTracker
 from site_generator import SiteGenerator
 from db import Database
-from publisher import XPublisher
+from publisher import XPublisher, BlueskyPublisher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PostNow")
 
 def main():
     print("=" * 60)
-    print("🚀 Xへの即時テスト投稿を開始します...")
+    print("🚀 X & Blueskyへの同時即時投稿を開始します...")
     print(f"サイトBASE URL: {config.site_base_url}")
+    print(f"Bluesky Handle: @{config.bluesky_handle}")
     print("=" * 60)
 
     db = Database()
@@ -64,29 +65,48 @@ def main():
     print(f"💰 価格: ￥{target_deal.regular_price:,} ➜ ￥{target_deal.current_price:,} ({target_deal.discount_percent}% OFF)")
     
     # 1. サイト生成 & GitHub Pages push
-    print("🌐 クッションページを生成中...")
+    print("🌐 クッションページ＆OGP画像を生成中...")
     gen = SiteGenerator(db)
     gen.build_site(latest_deal=target_deal)
 
     share_url = target_deal.get_share_url(config.site_base_url)
     print(f"🔗 クッションページURL: {share_url}")
 
-    # 2. X へ投稿 (Selenium)
-    print("🐦 X (Selenium) 投稿中...")
-    pub = XPublisher()
-    pub.enabled = True
-    pub.use_selenium = True
+    # 2. Bluesky へ投稿 (API経由)
+    print("\n🦋 Bluesky 投稿中...")
+    bsky_pub = BlueskyPublisher()
+    bsky_ok = False
+    if bsky_pub.enabled:
+        bsky_ok = bsky_pub.publish(target_deal)
+        if bsky_ok:
+            print("🎉 Blueskyへの投稿に成功しました！")
+            print(f"確認URL: https://bsky.app/profile/{config.bluesky_handle}")
+        else:
+            print("⚠️ Blueskyへの投稿に失敗しました。")
+    else:
+        print("⚠️ Blueskyが無効または認証未設定です。")
+
+    # 3. X へ投稿 (Selenium)
+    print("\n🐦 X (Selenium) 投稿中...")
+    x_pub = XPublisher()
+    x_pub.enabled = True
+    x_pub.use_selenium = True
     
     # ガードチェックをバイパスして投稿実行
-    ok = pub._publish_via_selenium(target_deal)
-    if ok:
+    x_ok = x_pub._publish_via_selenium(target_deal)
+    if x_ok:
+        print("🎉 X への投稿に成功しました！")
+        print("確認URL: https://x.com/tokka_sokuho")
+    else:
+        print("⚠️ Xへの投稿に失敗しました。")
+
+    if bsky_ok or x_ok:
         db.record_post(target_deal.asin, target_deal.current_price, target_deal.discount_percent, target_deal.title, deal=target_deal)
-        print("\n🎉 X へのテスト投稿が完了しました！")
+        print("\n✅ DBに投稿履歴を保存しました。")
         print(f"商品: {target_deal.title}")
         print(f"リンク: {share_url}")
-        print("Xのプロフィール (https://x.com/tokka_sokuho) を開いて投稿をご確認ください！")
     else:
-        print("\n❌ 投稿に失敗しました。")
+        print("\n❌ すべてのSNSへの投稿に失敗しました。")
 
 if __name__ == "__main__":
     main()

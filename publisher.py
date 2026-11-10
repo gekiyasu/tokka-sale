@@ -486,22 +486,33 @@ class BlueskyPublisher(BasePublisher):
         if not image_url or not self.access_jwt:
             return None
         try:
-            # 画像取得
-            img_res = requests.get(image_url, timeout=10)
-            img_res.raise_for_status()
-            img_data = img_res.content
+            img_data = None
+            # すでにSiteGeneratorによって生成済みのローカルOGP画像があればそれを優先利用
+            if deal and deal.asin:
+                local_ogp = Path(__file__).parent / "docs" / "ogp" / f"{deal.asin}.jpg"
+                if local_ogp.exists() and local_ogp.stat().st_size > 1000:
+                    try:
+                        img_data = local_ogp.read_bytes()
+                    except Exception:
+                        img_data = None
 
-            # Amazonが存在しないASINに対して返す1x1透明GIF(43バイト)を弾く
-            if len(img_data) < 1000:
-                logger.warning(f"有効な商品画像が存在しません (サイズ: {len(img_data)} bytes)")
-                return None
+            if not img_data:
+                # 画像取得
+                img_res = requests.get(image_url, timeout=10)
+                img_res.raise_for_status()
+                img_data = img_res.content
+
+                # Amazonが存在しないASINに対して返す1x1透明GIF(43バイト)を弾く
+                if len(img_data) < 1000:
+                    logger.warning(f"有効な商品画像が存在しません (サイズ: {len(img_data)} bytes)")
+                    return None
+
+                try:
+                    img_data = self._fit_product_image_to_card(img_data)
+                except Exception as ex:
+                    logger.warning(f"画像比率の調整をスキップしました ({ex})")
 
             content_type = "image/jpeg"
-            try:
-                img_data = self._fit_product_image_to_card(img_data)
-            except Exception as ex:
-                logger.warning(f"画像比率の調整をスキップしました ({ex})")
-
             # Blobアップロード
             upload_url = "https://bsky.social/xrpc/com.atproto.repo.uploadBlob"
             headers = {
@@ -617,8 +628,15 @@ class MultiPublisher:
         for pub in self.publishers:
             if getattr(pub, 'enabled', False):
                 any_enabled = True
-                if pub.publish(deal):
-                    success_count += 1
+                pub_name = pub.__class__.__name__
+                try:
+                    if pub.publish(deal):
+                        logger.info(f"✅ [{pub_name}] 投稿成功: {deal.asin}")
+                        success_count += 1
+                    else:
+                        logger.warning(f"⚠️ [{pub_name}] 投稿スキップまたは失敗: {deal.asin}")
+                except Exception as e:
+                    logger.error(f"❌ [{pub_name}] 投稿例外エラー: {e}")
         
         if not any_enabled:
             # どのSNSも有効化されていない場合はコンソールにシミュレーション出力
