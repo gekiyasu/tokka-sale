@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://gekiyasu.github.io/tokka-sale/sitemap.xml
