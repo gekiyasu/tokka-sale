@@ -1,17 +1,20 @@
 import html as html_module
 import re
 import random
+import math
 import logging
 import requests
 from typing import List, Optional
 from models import ProductDeal
 from config import config
+from db import Database, normalize_category
 
 logger = logging.getLogger(__name__)
 
 class DealsTracker:
-    def __init__(self, api_key: str = ""):
+    def __init__(self, api_key: str = "", db: Optional[Database] = None):
         self.api_key = api_key or config.keepa_api_key
+        self.db = db or Database()
 
     def sync_live_amazon_data(self, deal: ProductDeal) -> bool:
         """実際のAmazon.co.jp商品ページからリアルタイムの価格・評価・レビュー数を取得して完全一致させる"""
@@ -96,6 +99,13 @@ class DealsTracker:
             live_price = int(raw_price)
             if live_price <= 0:
                 return False
+
+            # CVR最大化フィルタ: Xタイムラインで即決・衝動買いされやすい実用価格帯 (500円〜35,000円) にフォーカス
+            # 5万円以上の超高額品は「見て終わり(冷やかしクリック)」になりやすくCVRを著しく悪化させるため除外
+            if live_price < 500 or live_price > 35000:
+                logger.warning(f"⚠️ CVR最適化のため即決対象外の価格帯です (￥{live_price:,}) -> スキップ: {deal.asin}")
+                return False
+
             deal.current_price = live_price
 
             # 2. ページ上に実際に表示されている参考価格・過去価格 (basisPrice) と割引率の抽出
@@ -159,18 +169,28 @@ class DealsTracker:
     def _discover_live_amazon_deals(self) -> List[ProductDeal]:
         """Amazon.co.jpの検索結果から現在セール中の人気商品をリアルタイム自動収集"""
         search_queries = [
-            ("Anker セール", "Anker", "ガジェット"),
-            ("アイリスオーヤマ セール", "アイリス", "日用品・家電"),
-            ("エレコム セール", "エレコム", "PC・スマホ周辺機器"),
-            ("ロジクール セール", "ロジクール", "PC周辺機器"),
-            ("バッファロー SSD 外付け", "バッファロー", "ストレージ"),
-            ("コカ・コーラ 24本 セール", "コカ・コーラ", "飲料・食品"),
-            ("UGREEN 充電器 セール", "UGREEN", "ガジェット"),
+            # CVR激高ジャンル: 日常消耗品・飲料・食品 (1,000〜3,000円台の即決・まとめ買い)
+            ("コカ・コーラ 24本 セール", "コカ・コーラ", "食品・飲料"),
+            ("ラベルレス 炭酸水 24本 セール", "炭酸水", "食品・飲料"),
+            ("天然水 500ml 24本 セール", "水", "食品・飲料"),
+            ("綾鷹 525ml 24本 セール", "お茶", "食品・飲料"),
+            ("ザバス プロテイン セール", "ザバス", "食品・飲料"),
+            ("アタックZERO 詰め替え セール", "アタック", "日用品"),
+            ("めぐりズム ホットアイマスク セール", "めぐりズム", "日用品"),
+            ("バブ 炭酸入浴剤 セール", "バブ", "日用品"),
+            # 定番人気ガジェット: 手頃な価格帯 (1,000〜5,000円台の即決品)
+            ("Anker 充電器 セール", "Anker", "ガジェット"),
+            ("Anker USB-C ケーブル セール", "Anker", "ガジェット"),
             ("CIO 充電器 セール", "CIO", "ガジェット"),
-            ("サンディスク SSD セール", "SanDisk", "ストレージ"),
-            ("ティファール セール", "ティファール", "キッチン・家電"),
-            ("パナソニック セール", "パナソニック", "家電"),
-            ("ソニー イヤホン セール", "ソニー", "オーディオ"),
+            ("CIO 巻き取り ケーブル セール", "CIO", "ガジェット"),
+            ("UGREEN 充電器 セール", "UGREEN", "ガジェット"),
+            ("Fire TV Stick セール", "Fire TV", "ガジェット"),
+            ("ロジクール マウス セール", "ロジクール", "PC周辺機器"),
+            ("エレコム 電源タップ セール", "エレコム", "PC・スマホ周辺機器"),
+            ("サンディスク microSD セール", "SanDisk", "PC周辺機器"),
+            ("バッファロー 外付けSSD セール", "バッファロー", "PC周辺機器"),
+            ("ティファール フライパン セール", "ティファール", "キッチン"),
+            ("アイリスオーヤマ セール", "アイリス", "日用品・家電"),
         ]
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -178,8 +198,34 @@ class DealsTracker:
             "Accept-Language": "ja-JP,ja;q=0.9",
         }
         discovered: List[ProductDeal] = []
-        shuffled_queries = list(search_queries)
-        random.shuffle(shuffled_queries)
+
+        # 自動PDCA学習ループ: 過去7日間のカテゴリ別クリック実績に基づく重み付け選定
+        try:
+            click_stats = self.db.get_category_click_stats(days=7)
+        except Exception as e:
+            logger.debug(f"[DealsTracker] クリック統計取得スキップ: {e}")
+            click_stats = {}
+
+        total_clicks = sum(click_stats.values())
+        if total_clicks > 0:
+            top_cat = max(click_stats.items(), key=lambda x: x[1])
+            logger.info(f"📈 [Auto-PDCA] 過去7日間のクリック学習中 (計{total_clicks}回 / 首位: {top_cat[0]} {top_cat[1]}回)")
+
+        # 各検索クエリの重みを算出 (Efraimidis-Spirakis アルゴリズム)
+        # 基本重み 1.0 + log2(1 + クリック数) * 1.5 で人気ジャンルの優先度を自動傾斜配分
+        scored_queries = []
+        for q_tuple in search_queries:
+            query, expected_kw, category = q_tuple
+            cat_clean = normalize_category(category)
+            clicks = click_stats.get(cat_clean, 0)
+            weight = 1.0 + math.log2(1.0 + max(0, clicks)) * 1.5
+            # 重み付き乱数スコア: score = random() ** (1 / weight)
+            rand_score = random.random() ** (1.0 / max(0.1, weight))
+            scored_queries.append((rand_score, q_tuple))
+
+        # スコア降順に並び替え (重みに比例した確率で重複なし抽出)
+        scored_queries.sort(key=lambda x: x[0], reverse=True)
+        shuffled_queries = [q for _, q in scored_queries]
 
         for query, expected_kw, category in shuffled_queries:
             if len(discovered) >= 12:

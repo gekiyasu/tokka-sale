@@ -92,12 +92,13 @@ class ProductDeal:
         chosen_tags = random.choice(tag_pools)
 
         target_url = share_url or self.affiliate_url
+        savings = max(0, self.regular_price - self.current_price)
 
         templates = [
-            "{title}\n\n🔥{d}%OFF🉐\n￥{reg}➡️￥{cur}\n👇特価詳細・セール一覧\n{url}\n\n{tags}",
-            "【特価】{title}\n\n￥{cur}（通常￥{reg} / {d}%OFF）\n詳細はこちら👇\n{url}\n\n{tags}",
-            "{title}\n\n💰￥{cur}\n（参考価格￥{reg}から{d}%OFF）\n{url}\n\n{tags}",
-            "本日のお得情報✨\n{title}\n\n{d}%OFFの￥{cur}\n{url}\n\n{tags}",
+            "🔥【{d}%OFF】￥{reg} ➡️ ￥{cur}（￥{sav}お得）\n{title}\n\n⚡タイムセール限定・売り切れ注意👇\n{url}\n\n{tags}",
+            "【急な値下げ速報】\n{title}\n\n通常 ￥{reg} が【{d}%OFF】の ￥{cur} に！\n在庫・セール詳細はこちら👇\n{url}\n\n{tags}",
+            "本日のお得商品✨\n{title}\n\n💰 ￥{cur}（参考価格￥{reg}から{d}%OFF / ￥{sav}引き）\n特価会場はこちら👇\n{url}\n\n{tags}",
+            "【Amazon特価】{title}\n\n🔥{d}%OFFで￥{cur}！\n今すぐセール価格をチェック👇\n{url}\n\n{tags}",
         ]
         template = random.choice(templates)
 
@@ -105,6 +106,7 @@ class ProductDeal:
             return template.format(
                 title=title, d=self.discount_percent,
                 reg=f"{self.regular_price:,}", cur=f"{self.current_price:,}",
+                sav=f"{savings:,}",
                 url=target_url, tags=chosen_tags,
             )
 

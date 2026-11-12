@@ -51,8 +51,12 @@ class Config:
     site_title: str = os.getenv("SITE_TITLE", "特価速報ナビ｜Amazonタイムセール・大特価まとめ")
     site_base_url: str = os.getenv("SITE_BASE_URL", "").rstrip("/")
     auto_git_push: bool = os.getenv("AUTO_GIT_PUSH", "false").lower() in ("true", "1", "yes")
-    # サイト掲載の上限件数と、掲載から外すまでの日数 (価格の古さ対策)
-    site_max_items: int = int(os.getenv("SITE_MAX_ITEMS", "200"))
-    site_max_age_days: int = int(os.getenv("SITE_MAX_AGE_DAYS", "14"))
+    # サイト掲載の上限件数と、掲載から外すまでの日数 (価格の古さ対策: 鮮度を最優先し3日以内に厳選)
+    site_max_items: int = int(os.getenv("SITE_MAX_ITEMS", "100"))
+    site_max_age_days: int = int(os.getenv("SITE_MAX_AGE_DAYS", "3"))
+
+    # クリック解析 & 自動学習ループ (GAS / Webhook / GA4)
+    click_tracker_url: str = os.getenv("CLICK_TRACKER_URL", "").strip()
+    ga_measurement_id: str = os.getenv("GA_MEASUREMENT_ID", "").strip()
 
 config = Config()

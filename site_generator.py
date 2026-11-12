@@ -48,6 +48,22 @@ class SiteGenerator:
         self.site_title = config.site_title
         self.base_url = config.site_base_url
 
+    def _ga_head_html(self) -> str:
+        """GA4 (Google Analytics 4) タグの生成"""
+        if not config.ga_measurement_id:
+            return ""
+        ga_id = html.escape(config.ga_measurement_id)
+        return f"""
+  <!-- Google Analytics 4 -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id={ga_id}"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){{dataLayer.push(arguments);}}
+    gtag('js', new Date());
+    gtag('config', '{ga_id}');
+  </script>
+"""
+
     def _generate_deal_ogp_image(self, asin: str, image_url: str) -> Optional[Path]:
         """商品画像を 1200x630 (1.91:1) の白背景キャンバス中央に配置し、X/Twitter等のリンクカードで絶対に見切れないOGP画像を生成"""
         if not image_url:
@@ -203,6 +219,21 @@ class SiteGenerator:
         rakuten_q = html.escape(d["title"][:35])
         rakuten_url = f"https://search.rakuten.co.jp/search/mall/{rakuten_q}/"
 
+        # 個別商品ページ下部の関連セール一覧(is_root=False)では、
+        # クローラーやボットによる数十〜数百件のAmazonリンク一斉プリフェッチ(誤爆・CVR悪化)を防ぐため、
+        # 画像やボタンのリンク先を個別詳細ページ(内部リンク)へ集約します。
+        card_target_url = aff_url if is_root else detail_href
+        card_link_rel = 'target="_blank" rel="nofollow sponsored noopener"' if is_root else ''
+        card_btn_text = '🛒 Amazonで特価を見る' if is_root else '🔍 セール詳細・在庫を見る'
+        card_btn_class = 'btn-amazon' if is_root else 'btn-detail-main'
+
+        sub_actions_html = f"""
+                <a href="{detail_href}" class="btn-detail">📄 詳細ページ</a>
+                <a href="{rakuten_url}" target="_blank" rel="nofollow noopener" class="btn-rakuten">🔎 楽天で比較</a>
+        """ if is_root else f"""
+                <a href="{rakuten_url}" target="_blank" rel="nofollow noopener" class="btn-rakuten" style="flex:1;">🔎 楽天で価格比較</a>
+        """
+
         return f"""
         <article class="deal-card" data-category="{cat}" data-discount="{disc}" data-price="{price}" data-savings="{savings}" data-title="{title.lower()}">
           <div class="card-badges">
@@ -210,7 +241,7 @@ class SiteGenerator:
             <span class="badge-category">{cat}</span>
             <span class="badge-time">🕒 {time_str}</span>
           </div>
-          <a href="{aff_url}" target="_blank" rel="nofollow sponsored noopener" class="card-img-link">
+          <a href="{card_target_url}" {card_link_rel} class="card-img-link">
             <img src="{img}" alt="{title}" loading="lazy" onerror="this.src='https://m.media-amazon.com/images/G/09/icons/no-img-sm._V192198896_.gif'">
           </a>
           <div class="card-body">
@@ -227,12 +258,11 @@ class SiteGenerator:
               <div class="price-save">💡 ￥{savings:,} お得！</div>
             </div>
             <div class="card-actions">
-              <a href="{aff_url}" target="_blank" rel="nofollow sponsored noopener" class="btn-amazon">
-                🛒 Amazonで特価を見る
+              <a href="{card_target_url}" {card_link_rel} class="{card_btn_class}">
+                {card_btn_text}
               </a>
               <div class="sub-actions">
-                <a href="{detail_href}" class="btn-detail">📄 詳細ページ</a>
-                <a href="{rakuten_url}" target="_blank" rel="nofollow noopener" class="btn-rakuten">🔎 楽天で比較</a>
+                {sub_actions_html}
               </div>
             </div>
           </div>
@@ -508,6 +538,23 @@ class SiteGenerator:
           filter: brightness(1.04);
           transform: translateY(-1px);
         }
+        .btn-detail-main {
+          display: block;
+          text-align: center;
+          background: #f1f5f9;
+          color: #1e293b;
+          font-weight: 700;
+          font-size: 0.9rem;
+          padding: 10px 14px;
+          border-radius: 9px;
+          border: 1px solid var(--border);
+          transition: all 0.15s;
+        }
+        .btn-detail-main:hover {
+          background: #e2e8f0;
+          border-color: #cbd5e1;
+          transform: translateY(-1px);
+        }
         .sub-actions {
           display: flex;
           gap: 8px;
@@ -573,9 +620,53 @@ class SiteGenerator:
           padding: 15px 20px;
           border-radius: 12px;
           box-shadow: 0 4px 14px rgba(225,29,72,0.35);
-          margin-top: 12px;
+          margin-top: 10px;
+          transition: filter 0.15s, transform 0.1s;
         }
-        .featured-cta:hover { filter: brightness(1.06); }
+        .featured-cta:hover { filter: brightness(1.06); transform: translateY(-1px); }
+        .featured-app-cta {
+          display: inline-block;
+          width: 100%;
+          text-align: center;
+          background: linear-gradient(180deg, #ffb340 0%, #ff9900 100%);
+          color: #111;
+          font-size: 1.05rem;
+          font-weight: 900;
+          padding: 13px 18px;
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(255,153,0,0.3);
+          margin-top: 10px;
+          transition: filter 0.15s, transform 0.1s;
+        }
+        .featured-app-cta:hover { filter: brightness(1.05); transform: translateY(-1px); }
+        .urgency-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: #fff1f2;
+          border: 1px solid #fecdd3;
+          color: #be123c;
+          font-size: 0.82rem;
+          font-weight: 700;
+          padding: 6px 10px;
+          border-radius: 8px;
+          margin-bottom: 10px;
+        }
+        .benefit-badges {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-top: 10px;
+        }
+        .benefit-badge {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          color: #334155;
+          font-size: 0.76rem;
+          font-weight: 600;
+          padding: 4px 8px;
+          border-radius: 6px;
+        }
         .section-heading {
           font-size: 1.25rem;
           font-weight: 800;
@@ -632,6 +723,7 @@ class SiteGenerator:
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary_large_image">
 {top_og_meta}
+{self._ga_head_html()}
   <style>{self._common_css()}</style>
 </head>
 <body>
@@ -780,6 +872,53 @@ class SiteGenerator:
     }});
 
     applyFilter();
+
+    // クリックデータ自動収集 (Auto-PDCA ビーコン)
+    (function() {{
+      const trackerUrl = "{html.escape(config.click_tracker_url)}";
+      const gaId = "{html.escape(config.ga_measurement_id)}";
+
+      document.addEventListener("click", function(e) {{
+        const a = e.target.closest("a");
+        if (!a) return;
+        const card = a.closest(".deal-card");
+        const isAmazonLink = a.classList.contains("btn-amazon") || a.classList.contains("card-img-link") || a.classList.contains("featured-cta");
+        if (card && isAmazonLink) {{
+          const href = a.getAttribute("href") || "";
+          const asinMatch = href.match(/\\/dp\\/([A-Z0-9]{{10}})/);
+          const asin = asinMatch ? asinMatch[1] : (card.getAttribute("data-asin") || "");
+          const cat = card.getAttribute("data-category") || "";
+          const price = parseInt(card.getAttribute("data-price") || "0", 10);
+          const disc = parseInt(card.getAttribute("data-discount") || "0", 10);
+
+          if (trackerUrl && asin) {{
+            const payload = JSON.stringify({{
+              event: "amazon_click",
+              asin: asin,
+              category: cat,
+              price: price,
+              discount: disc,
+              btn: a.classList.contains("btn-amazon") ? "index_card_amazon" : "index_image",
+              referrer: document.referrer || "",
+              timestamp: new Date().toISOString()
+            }});
+            if (navigator.sendBeacon) {{
+              navigator.sendBeacon(trackerUrl, payload);
+            }} else {{
+              fetch(trackerUrl, {{ method: "POST", mode: "no-cors", body: payload }}).catch(function() {{}});
+            }}
+          }}
+
+          if (window.gtag && gaId && asin) {{
+            gtag('event', 'amazon_click', {{
+              event_category: cat,
+              event_label: asin,
+              value: price
+            }});
+          }}
+        }}
+      }});
+    }})();
   </script>
 </body>
 </html>
@@ -833,6 +972,7 @@ class SiteGenerator:
   <meta name="twitter:title" content="{og_title}">
   <meta name="twitter:description" content="{html.escape(og_desc)}">
   <meta name="twitter:image" content="{og_img}">
+{self._ga_head_html()}
   <style>{self._common_css()}</style>
 </head>
 <body>
@@ -868,19 +1008,104 @@ class SiteGenerator:
           <span class="stars">⭐ {rating:.1f}</span>
           <span>({reviews:,}件のカスタマーレビュー)</span>
         </div>
-        <div class="price-box" style="margin:16px 0;padding:14px 16px;">
+        <div class="urgency-badge">
+          ⚡ タイムセール特価：在庫終了または予告なく価格が戻る場合があります（カート確保推奨）
+        </div>
+        <div class="price-box" style="margin:12px 0;padding:14px 16px;">
           <div class="price-old" style="font-size:0.9rem;">参考/過去価格: <s>￥{reg_price:,}</s></div>
           <div class="price-current" style="font-size:2rem;">￥{price:,} <span class="tax-in">(税込)</span></div>
           <div class="price-save" style="font-size:0.95rem;">💡 通常より ￥{savings:,} お得に購入可能！</div>
         </div>
-        <a href="{aff_url}" target="_blank" rel="nofollow sponsored noopener" class="featured-cta">
+        <div class="benefit-badges">
+          <span class="benefit-badge">📦 プライム対象なら送料無料</span>
+          <span class="benefit-badge">⚡ 最短翌日お届け</span>
+          <span class="benefit-badge">🔒 Amazon安心決済</span>
+        </div>
+        <a href="{aff_url}" target="_blank" rel="nofollow sponsored noopener" class="featured-cta" id="mainAmazonBtn">
           🛒 Amazonで詳細・最新価格を見る
         </a>
-        <p style="font-size:0.75rem;color:#64748b;margin-top:8px;">
-          ※タイムセールは在庫切れや期間終了により予告なく終了する場合があります。
+        <a href="intent://www.amazon.co.jp/dp/{asin}?tag={html.escape(config.amazon_tag)}#Intent;scheme=https;package=com.amazon.mShop.android.shopping;end;" class="featured-app-cta" id="appAmazonBtn" style="display:none;">
+          📱 Amazon公式アプリで開く（ログイン不要・1タップ購入）
+        </a>
+        <p style="font-size:0.75rem;color:#64748b;margin-top:10px;line-height:1.4;">
+          ※スマートフォンの方はAmazon公式アプリで開くと、ログインや決済情報の手間なく1-Clickでスムーズにご注文いただけます。<br>
+          ※セール特価・在庫は常に変動します。現在の正確な価格はリンク先のAmazonページでご確認ください。
         </p>
       </div>
     </section>
+
+    <script>
+      (function() {{
+        var ua = navigator.userAgent || navigator.vendor || window.opera;
+        var isMobile = /android|iphone|ipad|ipod/i.test(ua);
+        var isAndroid = /android/i.test(ua);
+        var isIOS = /iphone|ipad|ipod/i.test(ua);
+        var appBtn = document.getElementById('appAmazonBtn');
+        var mainBtn = document.getElementById('mainAmazonBtn');
+        var trackerUrl = "{html.escape(config.click_tracker_url)}";
+        var gaId = "{html.escape(config.ga_measurement_id)}";
+
+        // クリックデータ自動送信ビーコン (Auto-PDCA)
+        function sendClickEvent(btnType) {{
+          var payload = JSON.stringify({{
+            event: "amazon_click",
+            asin: "{asin}",
+            category: "{cat}",
+            price: {price},
+            discount: {disc},
+            btn: btnType,
+            referrer: document.referrer || "",
+            timestamp: new Date().toISOString()
+          }});
+
+          if (trackerUrl) {{
+            if (navigator.sendBeacon) {{
+              navigator.sendBeacon(trackerUrl, payload);
+            }} else {{
+              fetch(trackerUrl, {{
+                method: "POST",
+                mode: "no-cors",
+                headers: {{ "Content-Type": "application/json" }},
+                body: payload
+              }}).catch(function() {{}});
+            }}
+          }}
+
+          if (window.gtag && gaId) {{
+            gtag('event', 'amazon_click', {{
+              event_category: '{cat}',
+              event_label: '{asin}',
+              value: {price}
+            }});
+          }}
+        }}
+
+        if (mainBtn) {{
+          mainBtn.addEventListener('click', function() {{ sendClickEvent('main_button'); }});
+        }}
+
+        if (isMobile && appBtn) {{
+          appBtn.style.display = 'inline-block';
+          appBtn.addEventListener('click', function() {{
+            sendClickEvent('app_button');
+            if (isIOS) {{
+              setTimeout(function() {{
+                window.location.href = "{aff_url}";
+              }}, 1200);
+            }}
+          }});
+          if (isIOS) {{
+            appBtn.href = "com.amazon.mobile.shopping.web://www.amazon.co.jp/dp/{asin}?tag={html.escape(config.amazon_tag)}";
+          }}
+        }}
+
+        // 画像タップも計測
+        var imgLink = document.querySelector('.featured-img-wrap a');
+        if (imgLink) {{
+          imgLink.addEventListener('click', function() {{ sendClickEvent('featured_image'); }});
+        }}
+      }})();
+    </script>
 
     <!-- 回遊用：同時開催中の大特価セール一覧 -->
     <h2 class="section-heading">🔥 あわせてチェック！同時開催中の大特価セール商品</h2>

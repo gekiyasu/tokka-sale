@@ -19,6 +19,15 @@ logging.basicConfig(
 logger = logging.getLogger("AmazonSaleBot")
 
 def run_job(tracker: DealsTracker, db: Database, publisher: MultiPublisher, force: bool = False, limit: int = 3) -> int:
+    # 0. クリックデータの最新同期 & 学習状態のサマリー出力 (Auto-PDCA)
+    try:
+        from analytics_tracker import ClickTrackerSync
+        sync_engine = ClickTrackerSync(db)
+        sync_engine.sync()
+        sync_engine.print_analytics_summary(days=7)
+    except Exception as e:
+        logger.debug(f"[Auto-PDCA] クリック同期スキップ: {e}")
+
     logger.info("🔍 セール商品のスキャンを開始します...")
     deals = tracker.fetch_deals()
     

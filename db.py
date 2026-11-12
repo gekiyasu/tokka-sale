@@ -70,6 +70,23 @@ class Database:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_asin ON posted_deals (asin);")
 
+            # クリックイベント解析・学習用テーブル
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS click_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asin TEXT NOT NULL,
+                    category TEXT DEFAULT 'その他',
+                    button_type TEXT DEFAULT 'main_button',
+                    price INTEGER DEFAULT 0,
+                    discount_percent INTEGER DEFAULT 0,
+                    clicked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    referrer TEXT DEFAULT ''
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_click_asin ON click_events (asin);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_click_cat ON click_events (category);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_click_time ON click_events (clicked_at);")
+
             # 既存DBへのカラム自動マイグレーション
             cursor.execute("PRAGMA table_info(posted_deals)")
             existing_cols = {row[1] for row in cursor.fetchall()}
@@ -194,3 +211,104 @@ class Database:
                 "posted_at": r["posted_at"] or "",
             })
         return results
+
+    def record_click(
+        self,
+        asin: str,
+        category: str = "",
+        button_type: str = "main_button",
+        price: int = 0,
+        discount_percent: int = 0,
+        referrer: str = "",
+        clicked_at: Optional[str] = None
+    ) -> None:
+        """単一のクリックイベントを記録"""
+        cat = normalize_category(category)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if clicked_at:
+                cursor.execute("""
+                    INSERT INTO click_events (asin, category, button_type, price, discount_percent, referrer, clicked_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (asin, cat, button_type, price, discount_percent, referrer, clicked_at))
+            else:
+                cursor.execute("""
+                    INSERT INTO click_events (asin, category, button_type, price, discount_percent, referrer)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (asin, cat, button_type, price, discount_percent, referrer))
+            conn.commit()
+
+    def record_clicks_batch(self, events: List[dict]) -> int:
+        """GAS等のエンドポイントから受信した複数のクリックイベントを一括登録 (重複防止付き)"""
+        if not events:
+            return 0
+        inserted = 0
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for ev in events:
+                asin = str(ev.get("asin", "")).strip()
+                if not asin:
+                    continue
+                cat = normalize_category(ev.get("category", ""))
+                btn = str(ev.get("btn", ev.get("button_type", "main_button")))
+                price = int(ev.get("price", 0) or 0)
+                disc = int(ev.get("discount", ev.get("discount_percent", 0)) or 0)
+                ref = str(ev.get("referrer", ""))[:255]
+                ts = ev.get("timestamp") or ev.get("clicked_at")
+
+                # 直近同一タイムスタンプまたは秒単位の重複挿入を回避
+                cursor.execute("""
+                    SELECT id FROM click_events
+                    WHERE asin = ? AND button_type = ? AND clicked_at >= datetime('now', '-5 seconds')
+                """, (asin, btn))
+                if cursor.fetchone() is not None:
+                    continue
+
+                if ts and isinstance(ts, str) and len(ts) >= 19:
+                    cursor.execute("""
+                        INSERT INTO click_events (asin, category, button_type, price, discount_percent, referrer, clicked_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (asin, cat, btn, price, disc, ref, ts[:19]))
+                else:
+                    cursor.execute("""
+                        INSERT INTO click_events (asin, category, button_type, price, discount_percent, referrer)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (asin, cat, btn, price, disc, ref))
+                inserted += 1
+            conn.commit()
+        return inserted
+
+    def get_category_click_stats(self, days: int = 7) -> dict:
+        """指定期間内のカテゴリ別クリック数を集計 (学習アルゴリズム用)"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT category, COUNT(*) as click_cnt
+                FROM click_events
+                WHERE clicked_at >= datetime('now', ?)
+                GROUP BY category
+            """, (f"-{days} days",))
+            rows = cursor.fetchall()
+
+        stats = {cat: 0 for cat in CATEGORIES}
+        for cat, cnt in rows:
+            clean_cat = normalize_category(cat)
+            stats[clean_cat] = stats.get(clean_cat, 0) + cnt
+        return stats
+
+    def get_top_clicked_asins(self, days: int = 7, limit: int = 10) -> List[dict]:
+        """直近で最もクリックされている人気ASINトップリスト"""
+        with self._get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT c.asin, c.category, COUNT(*) as clicks, MAX(c.clicked_at) as last_clicked,
+                       COALESCE(p.title, '') as title, COALESCE(p.price, 0) as price
+                FROM click_events c
+                LEFT JOIN posted_deals p ON c.asin = p.asin
+                WHERE c.clicked_at >= datetime('now', ?)
+                GROUP BY c.asin
+                ORDER BY clicks DESC
+                LIMIT ?
+            """, (f"-{days} days", limit))
+            return [dict(r) for r in cursor.fetchall()]
