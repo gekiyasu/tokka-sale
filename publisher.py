@@ -140,19 +140,28 @@ class XPublisher(BasePublisher):
         from selenium.webdriver.support import expected_conditions as EC
 
         share_url = deal.get_share_url(config.site_base_url)
+        is_thread_mode = (config.x_post_mode == "thread")
 
-        # OGPリンクカードを確実に表示させるため、Webページが公開(200 OK)されるまで待機
-        if not config.x_attach_image and share_url.startswith("http"):
+        # ツリー投稿時は親ポストにURLを入れず自己リプで案内 / リンク直貼りモード時は本文にURL
+        if is_thread_mode:
+            text = deal.format_x_thread_parent_text()
+            reply_text = deal.format_x_thread_reply_text(share_url=share_url)
+        else:
+            text = deal.format_x_post_text(share_url=share_url)
+            reply_text = ""
+
+        # OGPリンクカードを確実に表示させるため、Webページが公開(200 OK)されるまで待機 (非画像添付時のみ)
+        if not config.x_attach_image and not is_thread_mode and share_url.startswith("http"):
             self._wait_for_page_deployment(share_url, timeout=120)
 
-        # 画像は添付せず、URLのOGPカード(summary_large_image)で表示する → 画像タップでサイトへ遷移できる
-        temp_img = self._prepare_x_image(deal.image_url) if config.x_attach_image else None
-        text = deal.format_x_post_text(share_url=share_url)
+        # 商品画像 (ツリーモード時はタイムライン視認性を最大化するため必須添付)
+        need_image = config.x_attach_image or is_thread_mode
+        temp_img = self._prepare_x_image(deal.image_url) if need_image else None
         driver = None
 
         try:
             driver = self._create_driver()
-            logger.info(f"[X-Selenium] 投稿画面を開いています: {deal.asin}")
+            logger.info(f"[X-Selenium] 投稿画面を開いています (モード: {config.x_post_mode}): {deal.asin}")
             driver.get("https://x.com/compose/post")
             time.sleep(3.5)
 
@@ -183,38 +192,35 @@ class XPublisher(BasePublisher):
             textarea.click()
             time.sleep(0.8)
 
-            # Draft.js エディタへ絵文字・改行を含むテキストをペーストイベント経由で一括入力
-            driver.execute_script(
-                """
-                const el = arguments[0];
-                const text = arguments[1];
-                el.focus();
-                const dt = new DataTransfer();
-                dt.setData('text/plain', text);
-                const pasteEvent = new ClipboardEvent('paste', {
-                    clipboardData: dt,
-                    bubbles: true,
-                    cancelable: true
-                });
-                el.dispatchEvent(pasteEvent);
-                """,
-                textarea,
-                text,
-            )
-            time.sleep(1.5)
-
-            # 万一ペーストイベントで入らなかった場合のフォールバック
-            entered_text = driver.execute_script("return (arguments[0].innerText || arguments[0].textContent || '').trim();", textarea)
-            if not entered_text:
-                bmp_text = "".join(c for c in text if ord(c) <= 0xFFFF)
-                textarea.send_keys(bmp_text)
+            def _input_text_to_element(el, input_text):
+                driver.execute_script(
+                    """
+                    const el = arguments[0];
+                    const text = arguments[1];
+                    el.focus();
+                    const dt = new DataTransfer();
+                    dt.setData('text/plain', text);
+                    const pasteEvent = new ClipboardEvent('paste', {
+                        clipboardData: dt,
+                        bubbles: true,
+                        cancelable: true
+                    });
+                    el.dispatchEvent(pasteEvent);
+                    """,
+                    el,
+                    input_text,
+                )
                 time.sleep(1.0)
+                entered = driver.execute_script("return (arguments[0].innerText || arguments[0].textContent || '').trim();", el)
+                if not entered:
+                    bmp_text = "".join(c for c in input_text if ord(c) <= 0xFFFF)
+                    el.send_keys(bmp_text)
+                    time.sleep(1.0)
+                el.send_keys(Keys.ESCAPE)
+                time.sleep(0.5)
 
-            # Xのオートコンプリート候補(ハッシュタグ等のサジェストポップアップ)が開いていればEscapeキーで確実に閉じる
-            # ※末尾でEnterを押すとトレンドタグ(サジェスト先頭候補)が誤確定されてしまうため、Enterは送信しない
-            time.sleep(0.5)
-            textarea.send_keys(Keys.ESCAPE)
-            time.sleep(0.5)
+            # 親ポストのテキストを入力
+            _input_text_to_element(textarea, text)
 
             # 商品画像の添付
             if temp_img and temp_img.exists():
@@ -228,19 +234,40 @@ class XPublisher(BasePublisher):
                 except Exception as img_err:
                     logger.warning(f"[X-Selenium] 画像添付をスキップしました: {img_err}")
 
-            # リンクカード(画像プレビュー)が生成されるのを待つ (最大20秒)
-            if not (temp_img and temp_img.exists()):
+            # ツリー投稿 (自己リプライを追加)
+            thread_created = False
+            if is_thread_mode and reply_text:
+                try:
+                    add_btns = driver.find_elements(By.CSS_SELECTOR, '[data-testid="addButton"]')
+                    if add_btns:
+                        add_btn = add_btns[0]
+                        driver.execute_script("arguments[0].click();", add_btn)
+                        time.sleep(1.5)
+                        reply_areas = driver.find_elements(By.CSS_SELECTOR, '[data-testid="tweetTextarea_1"]')
+                        if reply_areas:
+                            _input_text_to_element(reply_areas[0], reply_text)
+                            thread_created = True
+                            logger.info("[X-Selenium] ツリー(自己リプライ枠)に入力を完了しました")
+                except Exception as th_err:
+                    logger.warning(f"[X-Selenium] ツリー作成ボタンの処理に失敗: {th_err}")
+
+                # もしツリー入力枠が作成できなかった場合は親ポストの末尾にフォールバック追加
+                if not thread_created:
+                    logger.info("[X-Selenium] 単体ポストにフォールバックしてURLを追加します")
+                    _input_text_to_element(textarea, f"\n\n👇 詳細・在庫はこちら\n{share_url}")
+
+            # リンクカード(画像プレビュー)が生成されるのを待つ (非画像・非ツリーモード時)
+            if not is_thread_mode and not (temp_img and temp_img.exists()):
                 try:
                     WebDriverWait(driver, 20).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="card.wrapper"]'))
                     )
-                    # カード内部の画像プレビューが安定するまで少し待機
                     time.sleep(4.0)
                     logger.info("[X-Selenium] リンクカードの生成を確認しました")
                 except Exception:
                     logger.warning("[X-Selenium] リンクカードを確認できませんでした(リンクのみで投稿します)")
 
-            # ポスト送信ボタンを押下 (Ctrl+Enter または ボタンクリック)
+            # ポスト送信ボタンを押下
             time.sleep(1.5)
             posted = False
             for btn_selector in ['[data-testid="tweetButton"]', '[data-testid="tweetButtonInline"]']:
@@ -255,7 +282,7 @@ class XPublisher(BasePublisher):
                 textarea.send_keys(Keys.CONTROL, Keys.ENTER)
 
             time.sleep(5.0)
-            logger.info(f"[X-Selenium] ツイート送信成功: {deal.asin}")
+            logger.info(f"[X-Selenium] ツイート送信成功 (ツリーモード: {thread_created}): {deal.asin}")
             return True
 
         except Exception as e:

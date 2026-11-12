@@ -64,6 +64,18 @@ class SiteGenerator:
   </script>
 """
 
+    def _seo_head_tags(self) -> str:
+        """Google Search Console 認証タグや RSS リンク等の共通 SEO メタタグ"""
+        tags = []
+        if config.google_site_verification:
+            tags.append(f'  <meta name="google-site-verification" content="{html.escape(config.google_site_verification)}">')
+        if self.base_url:
+            tags.append(f'  <link rel="alternate" type="application/rss+xml" title="{html.escape(self.site_title)} RSS Feed" href="{self.base_url}/feed.xml">')
+            tags.append(f'  <link rel="sitemap" type="application/xml" title="Sitemap" href="{self.base_url}/sitemap.xml">')
+        tags.append('  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">')
+        tags.append('  <meta name="keywords" content="Amazon, タイムセール, 特価, 値下げ, セール速報, 割引, アマゾン, お得情報">')
+        return "\n".join(tags) + ("\n" if tags else "")
+
     def _generate_deal_ogp_image(self, asin: str, image_url: str) -> Optional[Path]:
         """商品画像を 1200x630 (1.91:1) の白背景キャンバス中央に配置し、X/Twitter等のリンクカードで絶対に見切れないOGP画像を生成"""
         if not image_url:
@@ -156,12 +168,119 @@ class SiteGenerator:
             deal_html = self._render_deal_page_html(target, other_deals, now_str)
             deal_path.write_text(deal_html, encoding="utf-8")
 
-        logger.info(f"🌐 まとめWebサイトを更新しました: {index_path} (掲載商品数: {len(deals)}件)")
+        # 3. SEO & クローラー用ファイルの自動生成 (sitemap.xml / robots.txt / feed.xml)
+        self._generate_sitemap_xml(deals)
+        self._generate_robots_txt()
+        self._generate_feed_xml(deals)
+
+        logger.info(f"🌐 まとめWebサイトを更新しました: {index_path} (掲載商品数: {len(deals)}件, SEO/RSS生成完了)")
 
         if config.auto_git_push:
             self._git_push_docs()
 
         return index_path
+
+    def _generate_sitemap_xml(self, deals: List[dict]) -> Path:
+        """検索エンジン(Googlebot/Bingbot)用の XML サイトマップを自動生成"""
+        base = (self.base_url or "").rstrip("/")
+        sitemap_path = DOCS_DIR / "sitemap.xml"
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        
+        url_entries = []
+        if base:
+            url_entries.append(f"""  <url>
+    <loc>{base}/index.html</loc>
+    <lastmod>{now_iso}</lastmod>
+    <changefreq>hourly</changefreq>
+    <priority>1.0</priority>
+  </url>""")
+            for d in deals:
+                asin = d["asin"]
+                posted_at = d.get("posted_at", "")
+                lastmod = now_iso
+                if posted_at:
+                    try:
+                        dt = datetime.strptime(posted_at[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                        lastmod = dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+                    except Exception:
+                        pass
+                url_entries.append(f"""  <url>
+    <loc>{base}/deals/{asin}.html</loc>
+    <lastmod>{lastmod}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.8</priority>
+  </url>""")
+        
+        xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+{chr(10).join(url_entries)}
+</urlset>
+"""
+        sitemap_path.write_text(xml_content, encoding="utf-8")
+        return sitemap_path
+
+    def _generate_robots_txt(self) -> Path:
+        """クローラー向けの robots.txt を生成しサイトマップURLを明示"""
+        robots_path = DOCS_DIR / "robots.txt"
+        base = (self.base_url or "").rstrip("/")
+        sitemap_line = f"Sitemap: {base}/sitemap.xml\n" if base else ""
+        content = f"""User-agent: *
+Allow: /
+{sitemap_line}"""
+        robots_path.write_text(content.strip() + "\n", encoding="utf-8")
+        return robots_path
+
+    def _generate_feed_xml(self, deals: List[dict]) -> Path:
+        """RSS 2.0 フィードを自動生成 (Feedly, アンテナサイト, 自動巡回向け)"""
+        feed_path = DOCS_DIR / "feed.xml"
+        base = (self.base_url or "").rstrip("/")
+        now_rfc822 = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+        
+        items = []
+        for d in deals[:40]:
+            asin = d["asin"]
+            title = html.escape(d["title"])
+            price = d["current_price"]
+            disc = d["discount_percent"]
+            reg = d.get("regular_price", price)
+            savings = max(0, reg - price)
+            cat = html.escape(d.get("category", "セール"))
+            deal_url = f"{base}/deals/{asin}.html" if base else d.get("affiliate_url", "")
+            desc = html.escape(f"【{disc}% OFF】Amazonタイムセール特価 ￥{price:,}（通常￥{reg:,}から￥{savings:,}引き） {d['title']}")
+            
+            posted_at = d.get("posted_at", "")
+            pub_date = now_rfc822
+            if posted_at:
+                try:
+                    dt = datetime.strptime(posted_at[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    pub_date = dt.strftime("%a, %d %b %Y %H:%M:%S +0000")
+                except Exception:
+                    pass
+            
+            items.append(f"""    <item>
+      <title>【{disc}% OFF】{title}</title>
+      <link>{deal_url}</link>
+      <guid isPermaLink="true">{deal_url}</guid>
+      <description>{desc}</description>
+      <category>{cat}</category>
+      <pubDate>{pub_date}</pubDate>
+    </item>""")
+
+        xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>{html.escape(self.site_title)}</title>
+    <link>{base}/index.html</link>
+    <description>Amazonのタイムセール・急激な値下がり大特価商品をリアルタイム自動配信中！</description>
+    <language>ja</language>
+    <lastBuildDate>{now_rfc822}</lastBuildDate>
+    <atom:link href="{base}/feed.xml" rel="self" type="application/rss+xml"/>
+{chr(10).join(items)}
+  </channel>
+</rss>
+"""
+        feed_path.write_text(xml_content, encoding="utf-8")
+        return feed_path
 
     def _git_push_docs(self):
         """GitHub Pages 等への自動デプロイ用 git add / commit / push"""
@@ -235,7 +354,7 @@ class SiteGenerator:
         """
 
         return f"""
-        <article class="deal-card" data-category="{cat}" data-discount="{disc}" data-price="{price}" data-savings="{savings}" data-title="{title.lower()}">
+        <article class="deal-card" data-category="{cat}" data-discount="{disc}" data-price="{price}" data-savings="{savings}" data-rating="{rating}" data-title="{title.lower()}">
           <div class="card-badges">
             <span class="badge-discount">🔥 {disc}% OFF</span>
             <span class="badge-category">{cat}</span>
@@ -675,6 +794,111 @@ class SiteGenerator:
           align-items: center;
           gap: 8px;
         }
+        .announce-bar {
+          background: linear-gradient(90deg, #1e293b 0%, #334155 100%);
+          color: #f8fafc;
+          padding: 8px 16px;
+          font-size: 0.82rem;
+          border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .announce-inner {
+          max-width: 1240px;
+          margin: 0 auto;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .announce-links {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+        }
+        .announce-link-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          background: rgba(255,255,255,0.15);
+          color: #fff;
+          padding: 3px 10px;
+          border-radius: 999px;
+          font-weight: 700;
+          font-size: 0.76rem;
+          transition: background 0.15s;
+        }
+        .announce-link-btn:hover { background: rgba(255,255,255,0.28); }
+        .announce-link-btn.btn-x { background: #000; color: #fff; border: 1px solid rgba(255,255,255,0.2); }
+        .announce-link-btn.btn-x:hover { background: #222; }
+        .announce-link-btn.btn-rss { background: #ea580c; }
+        .announce-link-btn.btn-rss:hover { background: #c2410c; }
+        /* クイックお得度フィルター */
+        .quick-filter-row {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+          margin-bottom: 12px;
+          padding-bottom: 12px;
+          border-bottom: 1px dashed var(--border);
+        }
+        .quick-tag {
+          font-size: 0.78rem;
+          color: var(--muted);
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          margin-right: 4px;
+        }
+        .quick-btn {
+          border: 1px solid var(--border);
+          background: #fff;
+          color: #334155;
+          padding: 5px 11px;
+          border-radius: 8px;
+          font-size: 0.8rem;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        .quick-btn:hover { border-color: var(--amazon); color: #111; }
+        .quick-btn.active {
+          background: #fff1f2;
+          color: var(--red);
+          border-color: var(--red);
+        }
+        /* シェアボタン */
+        .share-box {
+          margin-top: 14px;
+          padding-top: 14px;
+          border-top: 1px solid #f1f5f9;
+        }
+        .share-title {
+          font-size: 0.78rem;
+          color: var(--muted);
+          font-weight: 700;
+          margin-bottom: 8px;
+        }
+        .share-buttons {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .share-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 0.78rem;
+          font-weight: 700;
+          padding: 6px 12px;
+          border-radius: 8px;
+          cursor: pointer;
+          border: none;
+          transition: opacity 0.15s;
+        }
+        .share-btn:hover { opacity: 0.88; }
+        .share-btn.share-x { background: #000; color: #fff; }
+        .share-btn.share-line { background: #06c755; color: #fff; }
+        .share-btn.share-copy { background: #e2e8f0; color: #1e293b; }
         .site-footer {
           text-align: center;
           color: var(--muted);
@@ -711,18 +935,68 @@ class SiteGenerator:
   <meta property="og:image:height" content="630">
   <meta name="twitter:image" content="{top_og_img}">"""
 
+        top_site_url = f"{self.base_url}/index.html" if self.base_url else ""
+        rss_url = f"{self.base_url}/feed.xml" if self.base_url else ""
+        x_handle_clean = config.x_account_handle.lstrip("@")
+        x_profile_url = f"https://x.com/{x_handle_clean}" if x_handle_clean else ""
+
+        x_announce_html = f"""
+          <a href="{x_profile_url}" target="_blank" rel="noopener" class="announce-link-btn btn-x">
+            𝕏 @{html.escape(x_handle_clean)} をフォロー
+          </a>
+        """ if x_profile_url else """
+          <a href="https://x.com/search?q=Amazonセール&f=live" target="_blank" rel="noopener" class="announce-link-btn btn-x">
+            𝕏 で話題のセールを探す
+          </a>
+        """
+
+        announce_html = f"""
+  <div class="announce-bar">
+    <div class="announce-inner">
+      <span>⚡ <strong>速報更新中:</strong> Amazon急激値下げ・ゲリラタイムセールを自動巡回配信！</span>
+      <div class="announce-links">
+        {x_announce_html}
+        {f'<a href="{rss_url}" target="_blank" class="announce-link-btn btn-rss">📡 RSS購読</a>' if rss_url else ''}
+      </div>
+    </div>
+  </div>
+"""
+
+        website_json_ld = ""
+        if self.base_url:
+            website_json_ld = f"""
+  <script type="application/ld+json">
+  {{
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": {json.dumps(self.site_title)},
+    "url": {json.dumps(top_site_url)},
+    "description": "Amazonのタイムセール・急激な値下がり大特価商品をリアルタイム自動検知してまとめた特売速報サイト",
+    "potentialAction": {{
+      "@type": "SearchAction",
+      "target": "{self.base_url}/index.html?q={{search_term_string}}",
+      "query-input": "required name=search_term_string"
+    }}
+  }}
+  </script>
+"""
+
         return f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{html.escape(self.site_title)}</title>
-  <meta name="description" content="Amazonのタイムセール・急激な値下がり大特価商品をリアルタイム自動検知してまとめた特売速報サイトです。">
+  <meta name="description" content="Amazonのタイムセール・急激な値下がり大特価商品をリアルタイム自動検知してまとめた特売速報サイトです。食品・飲料からガジェット・家電まで毎日更新！">
+  <link rel="canonical" href="{top_site_url}">
   <meta property="og:title" content="{html.escape(self.site_title)}">
   <meta property="og:description" content="Amazonのタイムセール・大幅割引商品をリアルタイム自動更新中！">
   <meta property="og:type" content="website">
+  <meta property="og:url" content="{top_site_url}">
   <meta name="twitter:card" content="summary_large_image">
 {top_og_meta}
+{self._seo_head_tags()}
+{website_json_ld}
 {self._ga_head_html()}
   <style>{self._common_css()}</style>
 </head>
@@ -739,12 +1013,23 @@ class SiteGenerator:
       </div>
     </div>
   </header>
+  {announce_html}
 
   <main class="container">
     <!-- URLパラメータ ?asin= 指定時のピックアップ表示枠 -->
     <div id="spotlight-area"></div>
 
     <section class="filter-panel">
+      <!-- クイックお得度フィルター -->
+      <div class="quick-filter-row">
+        <span class="quick-tag">🎯 特集で絞り込み:</span>
+        <button class="quick-btn active" data-quick="all">すべて</button>
+        <button class="quick-btn" data-quick="half">🔥 50%以上OFF (半額以下)</button>
+        <button class="quick-btn" data-quick="under3000">💰 ￥3,000以下</button>
+        <button class="quick-btn" data-quick="highrating">⭐ 評価★4.3以上</button>
+        <button class="quick-btn" data-quick="bigsave">💎 ￥5,000以上値引き</button>
+      </div>
+
       <div class="search-row">
         <input type="search" id="searchInput" class="search-input" placeholder="🔍 商品名・ブランド名で検索 (例: Anker, コカ・コーラ, SSD)...">
         <div class="sort-group">
@@ -771,6 +1056,11 @@ class SiteGenerator:
   <footer class="site-footer">
     <p>※Amazonのアソシエイトとして、当メディアは適格販売により収入を得ています。</p>
     <p>※掲載されている価格・割引率は自動検知時点の情報です。最新の価格・在庫状況はリンク先のAmazon商品ページにてご確認ください。</p>
+    <p style="margin-top:8px;color:#94a3b8;">
+      <a href="index.html" style="text-decoration:underline;">トップページ</a> ｜ 
+      {f'<a href="{rss_url}" style="text-decoration:underline;">RSSフィード</a> ｜ ' if rss_url else ''}
+      <a href="sitemap.xml" style="text-decoration:underline;">サイトマップ</a>
+    </p>
   </footer>
 
   <script>
@@ -821,6 +1111,20 @@ class SiteGenerator:
     const searchInput = document.getElementById("searchInput");
     const moreBtn = document.getElementById("moreBtn");
     let currentCat = "すべて";
+    let currentQuick = "all";
+
+    function matchQuickFilter(card) {{
+      if (currentQuick === "all") return true;
+      const disc = Number(card.dataset.discount || 0);
+      const price = Number(card.dataset.price || 0);
+      const savings = Number(card.dataset.savings || 0);
+      const rating = Number(card.dataset.rating || 0);
+      if (currentQuick === "half") return disc >= 50;
+      if (currentQuick === "under3000") return price <= 3000;
+      if (currentQuick === "highrating") return rating >= 4.3;
+      if (currentQuick === "bigsave") return savings >= 5000;
+      return true;
+    }}
 
     function applyFilter() {{
       const q = searchInput.value.trim().toLowerCase();
@@ -828,7 +1132,8 @@ class SiteGenerator:
       Array.from(grid.querySelectorAll(".deal-card")).forEach(card => {{
         const matchCat = (currentCat === "すべて" || card.dataset.category === currentCat);
         const matchText = (!q || card.dataset.title.includes(q));
-        if (matchCat && matchText) {{
+        const matchQuick = matchQuickFilter(card);
+        if (matchCat && matchText && matchQuick) {{
           matched++;
           if (shown < visibleLimit) {{ card.style.display = ""; shown++; }} else {{ card.style.display = "none"; }}
         }} else {{
@@ -841,6 +1146,17 @@ class SiteGenerator:
 
     moreBtn.addEventListener("click", () => {{ visibleLimit += PAGE_SIZE; applyFilter(); }});
     searchInput.addEventListener("input", () => {{ visibleLimit = PAGE_SIZE; applyFilter(); }});
+
+    // クイックフィルター切替
+    document.querySelectorAll(".quick-btn").forEach(btn => {{
+      btn.addEventListener("click", () => {{
+        document.querySelectorAll(".quick-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentQuick = btn.dataset.quick;
+        visibleLimit = PAGE_SIZE;
+        applyFilter();
+      }});
+    }});
 
     document.querySelectorAll(".cat-btn").forEach(btn => {{
       btn.addEventListener("click", () => {{
@@ -870,6 +1186,20 @@ class SiteGenerator:
         applyFilter();
       }});
     }});
+
+    // URLパラメータの ?q= や ?cat= で初期検索
+    (function() {{
+      const p = new URLSearchParams(window.location.search);
+      const query = p.get("q");
+      if (query) {{
+        searchInput.value = query;
+      }}
+      const catParam = p.get("cat");
+      if (catParam) {{
+        const catBtn = Array.from(document.querySelectorAll(".cat-btn")).find(b => b.dataset.cat === catParam);
+        if (catBtn) catBtn.click();
+      }}
+    }})();
 
     applyFilter();
 
@@ -943,6 +1273,8 @@ class SiteGenerator:
 
         other_cards = "\n".join(self._render_card_html(d, is_root=False) for d in other_deals)
 
+        import urllib.parse
+
         deal_page_url = f"{self.base_url}/deals/{asin}.html" if self.base_url else ""
 
         # X(Twitter)リンクカードで商品全体が完全に見えるよう1200x630白背景のOGP画像を生成
@@ -951,6 +1283,44 @@ class SiteGenerator:
             og_img = f"{self.base_url}/ogp/{asin}.jpg"
         else:
             og_img = img
+
+        # シェア用URL
+        share_page_target = deal_page_url or aff_url
+        share_title_txt = f"🔥【{disc}% OFF】￥{reg_price:,}➡️￥{price:,}！ {target['title'][:55]}..."
+        x_share_href = f"https://x.com/intent/tweet?text={urllib.parse.quote(share_title_txt)}&url={urllib.parse.quote(share_page_target)}&hashtags=Amazonセール,タイムセール,PR"
+        line_share_href = f"https://social-plugins.line.me/lineit/share?url={urllib.parse.quote(share_page_target)}"
+
+        # Googleリッチリザルト用 Product 構造化データ (JSON-LD)
+        product_json_ld = f"""
+  <script type="application/ld+json">
+  {{
+    "@context": "https://schema.org/",
+    "@type": "Product",
+    "name": {json.dumps(target["title"])},
+    "image": [{json.dumps(og_img)}],
+    "description": {json.dumps(f"【{disc}% OFF】Amazonタイムセール特価 ￥{price:,}（通常￥{reg_price:,}から￥{savings:,}引き）！")},
+    "sku": {json.dumps(target["asin"])},
+    "offers": {{
+      "@type": "Offer",
+      "url": {json.dumps(deal_page_url or aff_url)},
+      "priceCurrency": "JPY",
+      "price": "{price}",
+      "priceValidUntil": "{(datetime.now(timezone.utc) + timedelta(days=5)).strftime('%Y-%m-%d')}",
+      "availability": "https://schema.org/InStock",
+      "itemCondition": "https://schema.org/NewCondition",
+      "seller": {{
+        "@type": "Organization",
+        "name": "Amazon.co.jp"
+      }}
+    }},
+    "aggregateRating": {{
+      "@type": "AggregateRating",
+      "ratingValue": "{rating:.1f}",
+      "reviewCount": "{max(1, reviews)}"
+    }}
+  }}
+  </script>
+"""
 
         return f"""<!DOCTYPE html>
 <html lang="ja">
@@ -972,6 +1342,8 @@ class SiteGenerator:
   <meta name="twitter:title" content="{og_title}">
   <meta name="twitter:description" content="{html.escape(og_desc)}">
   <meta name="twitter:image" content="{og_img}">
+{self._seo_head_tags()}
+{product_json_ld}
 {self._ga_head_html()}
   <style>{self._common_css()}</style>
 </head>
@@ -1027,7 +1399,23 @@ class SiteGenerator:
         <a href="intent://www.amazon.co.jp/dp/{asin}?tag={html.escape(config.amazon_tag)}#Intent;scheme=https;package=com.amazon.mShop.android.shopping;end;" class="featured-app-cta" id="appAmazonBtn" style="display:none;">
           📱 Amazon公式アプリで開く（ログイン不要・1タップ購入）
         </a>
-        <p style="font-size:0.75rem;color:#64748b;margin-top:10px;line-height:1.4;">
+
+        <!-- SNSシェアボックス -->
+        <div class="share-box">
+          <div class="share-title">📢 この大特価セール情報をシェアする:</div>
+          <div class="share-buttons">
+            <a href="{x_share_href}" target="_blank" rel="noopener" class="share-btn share-x">𝕏 でポスト</a>
+            <a href="{line_share_href}" target="_blank" rel="noopener" class="share-btn share-line">LINEで送る</a>
+            <button type="button" class="share-btn share-copy" id="copyBtn">📋 リンクをコピー</button>
+          </div>
+        </div>
+
+        <p style="font-size:0.75rem;color:#64748b;margin-top:12px;line-height:1.4;">
+          ※スマートフォンの方はAmazon公式アプリで開くと、ログインや決済情報の手間なく1-Clickでスムーズにご注文いただけます。<br>
+          ※セール特価・在庫は常に変動します。現在の正確な価格はリンク先のAmazonページでご確認ください。
+        </p>
+      </div>
+    </section>
           ※スマートフォンの方はAmazon公式アプリで開くと、ログインや決済情報の手間なく1-Clickでスムーズにご注文いただけます。<br>
           ※セール特価・在庫は常に変動します。現在の正確な価格はリンク先のAmazonページでご確認ください。
         </p>
@@ -1104,6 +1492,29 @@ class SiteGenerator:
         if (imgLink) {{
           imgLink.addEventListener('click', function() {{ sendClickEvent('featured_image'); }});
         }}
+
+        // リンクコピー機能
+        var copyBtn = document.getElementById('copyBtn');
+        if (copyBtn) {{
+          copyBtn.addEventListener('click', function() {{
+            var url = window.location.href;
+            if (navigator.clipboard) {{
+              navigator.clipboard.writeText(url).then(function() {{
+                copyBtn.textContent = '✅ コピー完了！';
+                setTimeout(function() {{ copyBtn.textContent = '📋 リンクをコピー'; }}, 2000);
+              }});
+            }} else {{
+              var input = document.createElement('input');
+              input.value = url;
+              document.body.appendChild(input);
+              input.select();
+              document.execCommand('copy');
+              document.body.removeChild(input);
+              copyBtn.textContent = '✅ コピー完了！';
+              setTimeout(function() {{ copyBtn.textContent = '📋 リンクをコピー'; }}, 2000);
+            }}
+          }});
+        }}
       }})();
     </script>
 
@@ -1117,6 +1528,11 @@ class SiteGenerator:
   <footer class="site-footer">
     <p><a href="../index.html" style="font-weight:700;color:#0f172a;">👉 {html.escape(self.site_title)} トップページ（全セール商品一覧）を見る</a></p>
     <p style="margin-top:8px;">※Amazonのアソシエイトとして、当メディアは適格販売により収入を得ています。</p>
+    <p style="margin-top:8px;color:#94a3b8;">
+      <a href="../index.html" style="text-decoration:underline;">トップ</a> ｜ 
+      <a href="../feed.xml" style="text-decoration:underline;">RSSフィード</a> ｜ 
+      <a href="../sitemap.xml" style="text-decoration:underline;">サイトマップ</a>
+    </p>
   </footer>
 </body>
 </html>
